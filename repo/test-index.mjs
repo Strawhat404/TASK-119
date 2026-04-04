@@ -1,0 +1,14 @@
+import Router from './frontend/js/router.js';
+import Store from './frontend/js/store.js';
+import { getSession, getCurrentUser, initRoles, needsSetup, setupAdmin, loadRoles, hasPermission, refreshSession, logout } from './frontend/js/services/auth-service.js';
+import { initSessionWarning } from './frontend/js/components/session-warning.js';
+import { renderLogin } from './frontend/js/views/login.js';
+import { renderDashboard } from './frontend/js/views/dashboard.js';
+import { renderReservations } from './frontend/js/views/reservations.js';
+import { renderUnlock } from './frontend/js/views/unlock.js';
+import { renderMap } from './frontend/js/views/map.js';
+import { renderContent } from './frontend/js/views/content.js';
+import { renderNotifications } from './frontend/js/views/notifications.js';
+import { renderAdmin } from './frontend/js/views/admin.js';
+import { renderSettings } from './frontend/js/views/settings.js';
+console.log("All imports succeeded.");

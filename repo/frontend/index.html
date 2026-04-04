@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HarborGate — Visitor Access &amp; Content Compliance</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">HarborGate</div>
+    <ul class="sidebar-nav" id="nav"></ul>
+  </aside>
+
+  <main class="main-content" id="app"></main>
+
+  <script>
+    // Diagnostic logger to capture "black screen" errors (non-module version)
+    window.onerror = (msg, url, line, col, error) => {
+      const err = `Error: ${msg}\nAt: ${url}:${line}:${col}\nStack: ${error?.stack}`;
+      console.error(err);
+      if (document.getElementById('app')) document.getElementById('app').innerHTML = `<div class="auth-error" style="margin:20px; white-space:pre-wrap;">${err}</div>`;
+      alert(err);
+    };
+    window.onunhandledrejection = (event) => {
+      const err = `Unhandled Rejection: ${event.reason?.message || event.reason}\nStack: ${event.reason?.stack}`;
+      console.error(err);
+      if (document.getElementById('app')) document.getElementById('app').innerHTML = `<div class="auth-error" style="margin:20px; white-space:pre-wrap;">${err}</div>`;
+      alert(err);
+    };
+  </script>
+
+  <script type="module">
+    import Router from './js/router.js';
+    import Store from './js/store.js';
+    import { getSession, getCurrentUser, initRoles, needsSetup, setupAdmin, loadRoles, hasPermission, refreshSession, logout } from './js/services/auth-service.js';
+    import { initSessionWarning } from './js/components/session-warning.js';
+    import { renderLogin } from './js/views/login.js';
+    import { renderDashboard } from './js/views/dashboard.js';
+    import { renderReservations } from './js/views/reservations.js';
+    import { renderUnlock } from './js/views/unlock.js';
+    import { renderMap } from './js/views/map.js';
+    import { renderContent } from './js/views/content.js';
+    import { renderNotifications } from './js/views/notifications.js';
+    import { renderAdmin } from './js/views/admin.js';
+    import { renderSettings } from './js/views/settings.js';
+
+    const app = document.getElementById('app');
+
+    const NAV_ITEMS = [
+      { path: '/', label: 'Dashboard', roles: ['visitor', 'operator', 'reviewer', 'admin'] },
+      { path: '/reservations', label: 'Reservations', roles: ['visitor', 'operator', 'admin'] },
+      { path: '/unlock', label: 'Remote Unlock', roles: ['operator', 'admin'] },
+      { path: '/map', label: 'Venue Map', roles: ['visitor', 'operator', 'reviewer', 'admin'] },
+      { path: '/content', label: 'Content', roles: ['reviewer', 'admin'] },
+      { path: '/notifications', label: 'Notifications', roles: ['visitor', 'operator', 'reviewer', 'admin'] },
+      { path: '/admin', label: 'Admin Console', roles: ['admin'] },
+      { path: '/settings', label: 'Settings', roles: ['visitor', 'operator', 'reviewer', 'admin'] }
+    ];
+
+    function buildNav() {
+      const nav = document.getElementById('nav');
+      const user = getCurrentUser();
+      const sidebar = document.getElementById('sidebar');
+
+      if (!user) {
+        sidebar.style.display = 'none';
+        nav.innerHTML = '';
+        return;
+      }
+
+      sidebar.style.display = '';
+      nav.innerHTML = NAV_ITEMS
+        .filter(item => item.roles.includes(user.role))
+        .map(item => `<li><a href="#${item.path}" data-route="${item.path}"><span>${item.label}</span></a></li>`)
+        .join('');
+    }
+
+    function updateNav(route) {
+      document.querySelectorAll('#nav a').forEach(a => {
+        a.classList.toggle('active', a.dataset.route === route);
+      });
+    }
+
+    // Register routes
+    Router.register('/login', (route) => { buildNav(); renderLogin(app); });
+    Router.register('/', (route) => { buildNav(); updateNav(route); renderDashboard(app); });
+    Router.register('/reservations', (route) => { buildNav(); updateNav(route); renderReservations(app); });
+    Router.register('/unlock', (route) => { buildNav(); updateNav(route); renderUnlock(app); });
+    Router.register('/map', (route) => { buildNav(); updateNav(route); renderMap(app); });
+    Router.register('/content', (route) => { buildNav(); updateNav(route); renderContent(app); });
+    Router.register('/notifications', (route) => { buildNav(); updateNav(route); renderNotifications(app); });
+    Router.register('/admin', (route) => { buildNav(); updateNav(route); renderAdmin(app); });
+    Router.register('/settings', (route) => { buildNav(); updateNav(route); renderSettings(app); });
+
+    // Initialize
+    async function init() {
+      await initRoles();
+      await loadRoles();
+
+      // Apply saved theme
+      const theme = localStorage.getItem('hg_theme') || 'light';
+      document.documentElement.setAttribute('data-theme', theme);
+
+      // Init session warning
+      initSessionWarning();
+
+      // Refresh session on user activity
+      document.addEventListener('click', () => refreshSession());
+      document.addEventListener('keydown', () => refreshSession());
+
+      // First-run setup: if no users exist, show setup screen
+      if (await needsSetup()) {
+        app.innerHTML = `
+          <div class="auth-container">
+            <div class="auth-card">
+              <h1>HarborGate Setup</h1>
+              <p>No accounts exist yet. Create the administrator account to get started.</p>
+              <form id="setup-form">
+                <label class="form-label">Admin Username
+                  <input type="text" name="username" class="input" required value="admin" />
+                </label>
+                <label class="form-label">Admin Password
+                  <input type="password" name="password" class="input" required minlength="12" placeholder="Min 12 chars, 1 upper, 1 lower, 1 number, 1 symbol" />
+                </label>
+                <label class="form-label">Confirm Password
+                  <input type="password" name="confirmPassword" class="input" required />
+                </label>
+                <div id="setup-error" class="auth-error"></div>
+                <button type="submit" class="btn btn-primary btn-block">Create Admin Account</button>
+              </form>
+            </div>
+          </div>
+        `;
+        document.getElementById('setup-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const fd = new FormData(e.target);
+          const username = fd.get('username').trim();
+          const password = fd.get('password');
+          const confirm = fd.get('confirmPassword');
+          if (password !== confirm) {
+            document.getElementById('setup-error').textContent = 'Passwords do not match';
+            return;
+          }
+          const result = await setupAdmin(username, password);
+          if (result.success) {
+            window.location.hash = '/login';
+            Router.start();
+          } else {
+            document.getElementById('setup-error').textContent = result.errors.join(', ');
+          }
+        });
+        return;
+      }
+
+      // Check auth and start routing
+      // On page reload, the in-memory encryption key is lost.
+      // Require re-login to restore the key before accessing encrypted stores.
+      const session = getSession();
+      const { getEncryptionKey } = await import('./js/database.js');
+      if (session && !getEncryptionKey()) {
+        logout();
+        window.location.hash = '/login';
+      } else if (!session && window.location.hash !== '#/login') {
+        window.location.hash = '/login';
+      }
+
+      Router.start();
+    }
+
+    init();
+  </script>
+</body>
+</html>
