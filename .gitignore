@@ -1,4 +1,6 @@
 node_modules/
-sessions/
+session.jsonl
 .DS_Store
 .claude/
+delivery_acceptance_report_*.md
+metadata.json
