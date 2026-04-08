@@ -6,14 +6,26 @@
  */
 import DB from '../database.js';
 import { addAuditLog } from './audit.js';
+import { getCurrentUser } from './auth-service.js';
 
 const WORKFLOW_STATES = ['draft', 'review', 'published', 'archived'];
+
+const CMS_ROLES = new Set(['reviewer', 'admin']);
+
+function requireCMSRole() {
+  const user = getCurrentUser();
+  if (!user || !CMS_ROLES.has(user.role)) {
+    throw new Error('Unauthorized: CMS operations require reviewer or admin role');
+  }
+  return user;
+}
 
 export function getWorkflowStates() {
   return [...WORKFLOW_STATES];
 }
 
 export async function createContent(data) {
+  requireCMSRole();
   const record = {
     title: data.title,
     body: data.body,
@@ -35,6 +47,7 @@ export async function createContent(data) {
     violationCount: 0,
     scannedAt: null,
     author: data.author || 'system',
+    authorId: data.authorId ?? null,
     reviewedBy: null,
     publishedBy: null,
     createdAt: Date.now(),
@@ -47,6 +60,7 @@ export async function createContent(data) {
 }
 
 export async function updateContent(id, updates, actor) {
+  requireCMSRole();
   const existing = await DB.get('content', id);
   if (!existing) throw new Error('Content not found');
 
@@ -78,6 +92,7 @@ export async function updateContent(id, updates, actor) {
 }
 
 export async function transitionWorkflow(id, newState, actor) {
+  requireCMSRole();
   const existing = await DB.get('content', id);
   if (!existing) throw new Error('Content not found');
 
@@ -112,10 +127,16 @@ export async function transitionWorkflow(id, newState, actor) {
   await DB.put('content', existing);
   await addAuditLog('content_workflow', actor, { contentId: id, newState }, before, { workflowState: newState });
 
+  // Log a specific action for publish so rate-limit checks on 'content_publish' match
+  if (newState === 'published') {
+    await addAuditLog('content_publish', actor, { contentId: id, title: existing.title });
+  }
+
   return existing;
 }
 
 export async function reviewContent(id, decision, actor, notes = '') {
+  requireCMSRole();
   const existing = await DB.get('content', id);
   if (!existing) throw new Error('Content not found');
 
@@ -131,6 +152,7 @@ export async function reviewContent(id, decision, actor, notes = '') {
 }
 
 export async function rollbackContent(id, targetVersion, actor) {
+  requireCMSRole();
   const existing = await DB.get('content', id);
   if (!existing) throw new Error('Content not found');
 

@@ -4,12 +4,12 @@ import DeviceService from '../services/device.js';
 import { getPermissionsForReservation, consumeEntry, getPermissionStatusLabel } from '../services/permissions.js';
 import { checkRateLimit } from '../services/rate-limits.js';
 import { showDrawer, closeDrawer } from '../components/drawer.js';
-import { showModal, closeModal } from '../components/modal.js';
+import { showModal, closeModal, escapeHTML } from '../components/modal.js';
 import { showNotification } from '../components/notifications.js';
 import { addAuditLog } from '../services/audit.js';
 
 export async function renderUnlock(container) {
-  if (!requireRole(['admin', 'operator'])) return;
+  if (!await requireRole(['admin', 'operator'])) return;
   const user = getCurrentUser();
 
   await DeviceService.init();
@@ -24,15 +24,15 @@ export async function renderUnlock(container) {
     <div class="device-grid">
       ${devices.length === 0 ? '<p class="empty-state">No devices registered. Add a device to get started.</p>' : ''}
       ${devices.map(d => `
-        <div class="device-card device-${d.status}" data-device-id="${d.id}">
+        <div class="device-card device-${escapeHTML(d.status)}" data-device-id="${d.id}">
           <div class="device-header">
-            <h3>${d.name}</h3>
-            <span class="badge badge-${d.status === 'online' ? 'approved' : 'denied'}">${d.status}</span>
+            <h3>${escapeHTML(d.name)}</h3>
+            <span class="badge badge-${d.status === 'online' ? 'approved' : 'denied'}">${escapeHTML(d.status)}</span>
           </div>
-          <p class="device-zone">Zone: ${d.zone || 'Unassigned'}</p>
-          <p class="device-type">Type: ${d.type || 'door'}</p>
+          <p class="device-zone">Zone: ${escapeHTML(d.zone || 'Unassigned')}</p>
+          <p class="device-type">Type: ${escapeHTML(d.type || 'door')}</p>
           <p class="device-seen">Last seen: ${d.lastSeen ? new Date(d.lastSeen).toLocaleString() : 'Never'}</p>
-          <button class="btn btn-primary btn-block unlock-btn" data-device-id="${d.id}" data-device-name="${d.name}">
+          <button class="btn btn-primary btn-block unlock-btn" data-device-id="${d.id}" data-device-name="${escapeHTML(d.name)}">
             Unlock
           </button>
         </div>
@@ -51,7 +51,7 @@ export async function renderUnlock(container) {
             <td><span class="badge badge-${cmd.status === 'acknowledged' ? 'approved' : cmd.status === 'failed' ? 'denied' : 'pending'}">${cmd.status}</span></td>
             <td>${cmd.retryCount}</td>
             <td>${new Date(cmd.createdAt).toLocaleString()}</td>
-            <td>${cmd.reason || ''}</td>
+            <td>${escapeHTML(cmd.reason || '')}</td>
           </tr>`).join('')}
         </tbody>
       </table>
@@ -111,9 +111,9 @@ export async function renderUnlock(container) {
   });
 
   function openUnlockDrawer(deviceId, deviceName) {
-    showDrawer('Unlock: ' + deviceName, `
+    showDrawer('Unlock: ' + escapeHTML(deviceName), `
       <form id="unlock-form">
-        <p>You are about to unlock <strong>${deviceName}</strong>.</p>
+        <p>You are about to unlock <strong>${escapeHTML(deviceName)}</strong>.</p>
         <p class="hint">This action will be recorded in the audit log.</p>
         <label class="form-label">Reservation ID (required for visitor access)
           <input type="text" name="reservationId" class="input" placeholder="Enter reservation ID or leave blank for operator override" />
@@ -144,7 +144,7 @@ export async function renderUnlock(container) {
       // Validate permission BEFORE showing the confirmation modal
       let activePermission = null;
       if (reservationId) {
-        const permissions = await getPermissionsForReservation(Number(reservationId));
+        const permissions = await getPermissionsForReservation(Number(reservationId), user);
         activePermission = permissions.find(p => p.status === 'active');
         if (!activePermission) {
           document.getElementById('unlock-error').textContent =
@@ -155,8 +155,8 @@ export async function renderUnlock(container) {
 
       // Rate-limit check: device-scoped and global unlock rules
       const [deviceRl, globalRl] = await Promise.all([
-        checkRateLimit('device', String(deviceId), 'unlock'),
-        checkRateLimit('global', '', 'unlock')
+        checkRateLimit('device', String(deviceId), 'unlock_command'),
+        checkRateLimit('global', '', 'unlock_command')
       ]);
       if (!deviceRl.allowed || !globalRl.allowed) {
         document.getElementById('unlock-error').textContent =
@@ -169,9 +169,9 @@ export async function renderUnlock(container) {
       closeDrawer();
       showModal('Confirm Remote Unlock', `
         <div class="confirm-unlock-panel">
-          <p>You are about to remotely unlock <strong>${deviceName}</strong>.</p>
-          ${reservationId ? `<p><strong>Reservation ID:</strong> ${reservationId}</p>` : '<p><em>Operator override — no reservation.</em></p>'}
-          <p><strong>Reason recorded:</strong> ${reason}</p>
+          <p>You are about to remotely unlock <strong>${escapeHTML(deviceName)}</strong>.</p>
+          ${reservationId ? `<p><strong>Reservation ID:</strong> ${escapeHTML(reservationId)}</p>` : '<p><em>Operator override — no reservation.</em></p>'}
+          <p><strong>Reason recorded:</strong> ${escapeHTML(reason)}</p>
           <p class="hint">This action will be immutably recorded in the audit log.</p>
           <div id="confirm-unlock-error" class="auth-error"></div>
           <div class="form-actions">

@@ -1,5 +1,15 @@
 let modalEl = null;
 
+export function escapeHTML(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export function showModal(title, bodyHTML) {
   closeModal();
 
@@ -8,7 +18,7 @@ export function showModal(title, bodyHTML) {
   modalEl.innerHTML = `
     <div class="modal">
       <div class="modal-header">
-        <h2>${title}</h2>
+        <h2>${escapeHTML(title)}</h2>
         <button class="modal-close" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">${bodyHTML}</div>

@@ -13,12 +13,17 @@ const DB_VERSION = 2;
 // whenever an admin updates their record under a different key.
 const ENCRYPTED_STORES = new Set([
   'reservations',
+  'entry_permissions',
   'devices',
+  'pois',
+  'content',
   'reports',
   'audit_logs',
   'notifications',
   'command_outbox',
-  'rate_limits'
+  'rate_limits',
+  'zones',
+  'geofences'
 ]);
 
 const STORES = {
@@ -59,7 +64,8 @@ async function encryptIfNeeded(storeName, record) {
   if (!_encryptionKey || !ENCRYPTED_STORES.has(storeName)) return record;
   try {
     const { default: Crypto } = await import('./crypto.js');
-    const indexFields = { id: record.id };
+    const indexFields = {};
+    if (record.id !== undefined) indexFields.id = record.id;
     if (storeName === 'reservations') {
       indexFields.userId = record.userId;
       indexFields.status = record.status;
@@ -83,6 +89,16 @@ async function encryptIfNeeded(storeName, record) {
     } else if (storeName === 'rate_limits') {
       indexFields.scope = record.scope;
       indexFields.action = record.action;
+    } else if (storeName === 'entry_permissions') {
+      indexFields.reservationId = record.reservationId;
+      indexFields.status = record.status;
+    } else if (storeName === 'pois') {
+      indexFields.zone = record.zone;
+    } else if (storeName === 'content') {
+      indexFields.status = record.status;
+      indexFields.workflowState = record.workflowState;
+    } else if (storeName === 'geofences') {
+      indexFields.zone = record.zone;
     }
     const encrypted = await Crypto.encryptRecord(record, _encryptionKey);
     return { ...encrypted, ...indexFields };
@@ -184,15 +200,18 @@ const DB = {
     return promisify(store.add(encrypted));
   },
   async put(storeName, record) {
+    if (storeName === 'audit_logs') throw new Error('audit_logs is append-only; records cannot be modified');
     const encrypted = await encryptIfNeeded(storeName, record);
     const store = await getStore(storeName, 'readwrite');
     return promisify(store.put(encrypted));
   },
   async remove(storeName, id) {
+    if (storeName === 'audit_logs') throw new Error('audit_logs is append-only; records cannot be deleted');
     const store = await getStore(storeName, 'readwrite');
     return promisify(store.delete(id));
   },
   async clear(storeName) {
+    if (storeName === 'audit_logs') throw new Error('audit_logs is append-only; store cannot be cleared');
     const store = await getStore(storeName, 'readwrite');
     return promisify(store.clear());
   },

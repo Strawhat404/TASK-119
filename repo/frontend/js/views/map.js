@@ -6,7 +6,7 @@ import {
   planRoute, suggestNearestEntry, distanceFeet, calculateWalkTime,
   getWalkSpeed, setWalkSpeed
 } from '../services/map.js';
-import { showModal, closeModal } from '../components/modal.js';
+import { showModal, closeModal, escapeHTML } from '../components/modal.js';
 import { showNotification } from '../components/notifications.js';
 
 const ZONE_LAYOUT = [
@@ -21,7 +21,7 @@ const ZONE_LAYOUT = [
 const SCALE = 10;
 
 export async function renderMap(container) {
-  if (!requireAuth()) return;
+  if (!await requireAuth()) return;
 
   const pois = await getAllPOIs();
   const geofences = await getAllGeofences();
@@ -57,7 +57,7 @@ export async function renderMap(container) {
           </label>
           <label class="form-label" id="geofence-select-label" style="display:none">Geofence
             <select id="search-geofence" class="input">
-              ${geofences.map(g => `<option value="${g.id}">${g.name}</option>`).join('')}
+              ${geofences.map(g => `<option value="${g.id}">${escapeHTML(g.name)}</option>`).join('')}
             </select>
           </label>
           <button class="btn btn-primary" id="search-btn">Search</button>
@@ -84,7 +84,7 @@ export async function renderMap(container) {
           <g class="poi-marker" data-poi-id="${p.id}">
             <circle cx="${p.x / SCALE}" cy="${p.y / SCALE}" r="5"
                     fill="${p.type === 'entry' ? '#22c55e' : p.type === 'exit' ? '#ef4444' : '#3b82f6'}" stroke="#fff" stroke-width="1" />
-            <text x="${p.x / SCALE}" y="${p.y / SCALE - 8}" text-anchor="middle" class="poi-label">${p.name}</text>
+            <text x="${p.x / SCALE}" y="${p.y / SCALE - 8}" text-anchor="middle" class="poi-label">${escapeHTML(p.name)}</text>
           </g>
         `).join('')}
         ${geofences.map(g => `
@@ -104,7 +104,7 @@ export async function renderMap(container) {
         <ul class="poi-list">
           ${pois.map(p => `
             <li class="poi-item">
-              <span><strong>${p.name}</strong> (${p.x} ft, ${p.y} ft) — ${p.type} ${p.zone ? '@ ' + p.zone : ''}</span>
+              <span><strong>${escapeHTML(p.name)}</strong> (${p.x} ft, ${p.y} ft) — ${escapeHTML(p.type)} ${p.zone ? '@ ' + escapeHTML(p.zone) : ''}</span>
               <div>
                 <button class="btn btn-sm" data-action="route-to" data-poi-id="${p.id}">Route</button>
                 <button class="btn btn-sm btn-danger" data-action="delete-poi" data-poi-id="${p.id}">Delete</button>
@@ -157,7 +157,7 @@ export async function renderMap(container) {
     panel.innerHTML = `
       <h3>Search Results (${results.length})</h3>
       ${results.length === 0 ? '<p>No POIs found.</p>' : `
-        <ul class="poi-list">${results.map(p => `<li class="poi-item"><strong>${p.name}</strong> (${p.x} ft, ${p.y} ft)</li>`).join('')}</ul>
+        <ul class="poi-list">${results.map(p => `<li class="poi-item"><strong>${escapeHTML(p.name)}</strong> (${p.x} ft, ${p.y} ft)</li>`).join('')}</ul>
       `}
     `;
   });
@@ -171,13 +171,13 @@ export async function renderMap(container) {
 
       const entry = suggestNearestEntry(pois, { x: target.x, y: target.y });
       const from = entry ? { x: entry.poi.x, y: entry.poi.y } : { x: 0, y: 0 };
-      const route = planRoute(from, { x: target.x, y: target.y });
+      const route = planRoute(from, { x: target.x, y: target.y }, [], getWalkSpeed());
 
       const panel = document.getElementById('route-result');
       panel.style.display = '';
       panel.innerHTML = `
-        <h3>Route to ${target.name}</h3>
-        ${entry ? `<p>Suggested entry: <strong>${entry.poi.name}</strong></p>` : '<p>No entry points defined.</p>'}
+        <h3>Route to ${escapeHTML(target.name)}</h3>
+        ${entry ? `<p>Suggested entry: <strong>${escapeHTML(entry.poi.name)}</strong></p>` : '<p>No entry points defined.</p>'}
         <p>Total distance: <strong>${route.totalDistanceFeet} ft</strong></p>
         <p>Est. walk time: <strong>${route.totalWalkTimeMinutes} min</strong> at ${getWalkSpeed()} mph</p>
         ${route.segments.map((s, i) => `
@@ -330,7 +330,9 @@ export async function renderMap(container) {
       document.getElementById('geofence-form').addEventListener('submit', async (e2) => {
         e2.preventDefault();
         const fd = new FormData(e2.target);
-        await saveGeofence({ name: fd.get('name'), zone: fd.get('zone'), points });
+        const rawName = (fd.get('name') || '').replace(/[<>"'&]/g, '').trim();
+        if (!rawName) { showNotification('Geofence name is required', 'warning'); return; }
+        await saveGeofence({ name: rawName, zone: fd.get('zone'), points });
         showNotification('Geofence saved', 'success');
         closeModal();
         renderMap(container);

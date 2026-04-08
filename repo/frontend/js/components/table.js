@@ -1,4 +1,5 @@
 import Store from '../store.js';
+import { escapeHTML } from './modal.js';
 
 export function renderTable(container, columns, data) {
   if (!data.length) {
@@ -14,7 +15,7 @@ export function renderTable(container, columns, data) {
       <tbody>
         ${data.map(row => `
           <tr>
-            ${columns.map(c => `<td>${c.render ? c.render(row[c.key], row) : (row[c.key] ?? '')}</td>`).join('')}
+            ${columns.map(c => `<td>${c.render ? c.render(row[c.key], row) : escapeHTML(row[c.key] ?? '')}</td>`).join('')}
           </tr>
         `).join('')}
       </tbody>
@@ -43,7 +44,7 @@ export function renderPaginatedTable(container, tableId, columns, onRender) {
 
   const bodyRows = rows.map(row => `
     <tr>
-      ${columns.map(c => `<td>${c.render ? c.render(row[c.key], row) : (row[c.key] ?? '')}</td>`).join('')}
+      ${columns.map(c => `<td>${c.render ? c.render(row[c.key], row) : escapeHTML(row[c.key] ?? '')}</td>`).join('')}
     </tr>
   `).join('');
 

@@ -10,6 +10,7 @@ import {
   resolveTemplate,
   createNotificationObject,
   applyDelivery,
+  applyFailedDelivery,
   TEMPLATES,
   MAX_RETRIES
 } from '../lib/notification-logic.js';
@@ -32,29 +33,28 @@ export async function createNotification({ userId, templateId, variables, type =
 }
 
 export async function deliverNotification(notification) {
-  applyDelivery(notification);
-  await DB.put('notifications', notification);
-  return notification;
+  try {
+    applyDelivery(notification);
+    await DB.put('notifications', notification);
+    return notification;
+  } catch (err) {
+    applyFailedDelivery(notification);
+    try { await DB.put('notifications', notification); } catch {}
+    return notification;
+  }
 }
 
 export async function retryFailedNotifications() {
   const all = await DB.getAll('notifications');
-  const failed = all.filter(n => n.status === 'failed' && n.retryCount < MAX_RETRIES);
+  // Retryable: notifications that failed delivery but haven't exhausted retries.
+  // applyFailedDelivery increments retryCount and only sets status='failed' at MAX_RETRIES,
+  // so retryable notifications are still 'pending' with retryCount > 0 and < MAX_RETRIES.
+  const retryable = all.filter(n => n.status === 'pending' && n.retryCount > 0 && n.retryCount < MAX_RETRIES);
   const results = [];
 
-  for (const n of failed) {
-    n.retryCount += 1;
-    try {
-      const result = await deliverNotification(n);
-      results.push(result);
-    } catch {
-      if (n.retryCount >= MAX_RETRIES) {
-        n.status = 'failed';
-        n.failedAt = Date.now();
-      }
-      await DB.put('notifications', n);
-      results.push(n);
-    }
+  for (const n of retryable) {
+    const result = await deliverNotification(n);
+    results.push(result);
   }
 
   return results;

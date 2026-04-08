@@ -9,12 +9,17 @@ const REPO_ROOT = resolve(__dirname, '..');
 const FRONTEND_DIR = resolve(REPO_ROOT, 'frontend');
 
 // Import production logic modules for behavioral tests
-import { validatePassword, ROLE_DEFINITIONS, hasPermissionForRole } from '../frontend/js/lib/auth-logic.js';
-import { resolveTemplate, TEMPLATES } from '../frontend/js/lib/notification-logic.js';
-import { scanContent, canTransition, WORKFLOW_STATES } from '../frontend/js/lib/content-logic.js';
-import { calculatePermissionWindow, createPermissionObject, consumeEntry } from '../frontend/js/lib/permissions-logic.js';
-import { validateUnlockReason } from '../frontend/js/lib/device-logic.js';
+import {
+  validatePassword, ROLE_DEFINITIONS, hasPermissionForRole,
+  isAccountLocked, processFailedLogin, processSuccessfulLogin,
+  isSessionExpired, MAX_ATTEMPTS, LOCKOUT_DURATION, SESSION_TIMEOUT
+} from '../frontend/js/lib/auth-logic.js';
+import { resolveTemplate, TEMPLATES, createNotificationObject, applyDelivery, applyFailedDelivery, MAX_RETRIES } from '../frontend/js/lib/notification-logic.js';
+import { scanContent, canTransition, WORKFLOW_STATES, VALID_TRANSITIONS, generateDiff } from '../frontend/js/lib/content-logic.js';
+import { calculatePermissionWindow, createPermissionObject, consumeEntry, isWithinPermissionWindow, getPermissionStatusLabel, WINDOW_BEFORE_MS, WINDOW_AFTER_MS } from '../frontend/js/lib/permissions-logic.js';
+import { validateUnlockReason, createCommandObject, applyAckTimeout, applyAck, applyRetry, ACK_TIMEOUT, MAX_RETRY_DURATION } from '../frontend/js/lib/device-logic.js';
 import { formatAuditTimestamp, createAuditEntry } from '../frontend/js/lib/audit-logic.js';
+import { distanceFeet, searchByRadius, searchByZone, pointInPolygon, searchByPolygon, calculateWalkTime, planRoute, getEntryPoints, suggestNearestEntry } from '../frontend/js/lib/map-logic.js';
 
 describe('Application Structure', () => {
   it('should have index.html as entry point', () => {
@@ -133,10 +138,11 @@ describe('Encryption at Rest', () => {
     assert.ok(db.includes('clearEncryptionKey'), 'database.js must export clearEncryptionKey');
   });
 
-  it('should derive session key on login', () => {
+  it('should derive encryption key on login via KEK/DEK wrapping', () => {
     const auth = readFileSync(resolve(FRONTEND_DIR, 'js', 'services', 'auth-service.js'), 'utf-8');
-    assert.ok(auth.includes('deriveSessionKey'), 'auth-service.js must call deriveSessionKey on login');
-    assert.ok(auth.includes('setEncryptionKey'), 'auth-service.js must call setEncryptionKey after deriving key');
+    assert.ok(auth.includes('deriveKEK'), 'auth-service.js must call deriveKEK on login');
+    assert.ok(auth.includes('unwrapDEK'), 'auth-service.js must call unwrapDEK to recover shared data key');
+    assert.ok(auth.includes('setEncryptionKey'), 'auth-service.js must call setEncryptionKey after unwrapping DEK');
   });
 
   it('should clear encryption key on logout', () => {
@@ -150,9 +156,12 @@ describe('Encryption at Rest', () => {
     assert.ok(db.includes('decryptIfNeeded'), 'database.js get must call decryptIfNeeded');
   });
 
-  it('should have deriveSessionKey in crypto.js', () => {
+  it('should have KEK/DEK key management in crypto.js', () => {
     const crypto = readFileSync(resolve(FRONTEND_DIR, 'js', 'crypto.js'), 'utf-8');
-    assert.ok(crypto.includes('deriveSessionKey'), 'crypto.js must export deriveSessionKey');
+    assert.ok(crypto.includes('deriveKEK'), 'crypto.js must export deriveKEK');
+    assert.ok(crypto.includes('generateDEK'), 'crypto.js must export generateDEK');
+    assert.ok(crypto.includes('wrapDEK'), 'crypto.js must export wrapDEK');
+    assert.ok(crypto.includes('unwrapDEK'), 'crypto.js must export unwrapDEK');
     assert.ok(crypto.includes('encryptRecord'), 'crypto.js must export encryptRecord');
     assert.ok(crypto.includes('decryptRecord'), 'crypto.js must export decryptRecord');
   });
@@ -353,5 +362,520 @@ describe('Service-Layer Authorization', () => {
     const res = readFileSync(resolve(FRONTEND_DIR, 'js', 'views', 'reservations.js'), 'utf-8');
     assert.ok(res.includes('Not authorized to approve') && res.includes('Not authorized to deny'),
       'reservations.js must enforce canManage on approve/deny actions');
+  });
+});
+
+// ============================================================================
+// BEHAVIORAL INTEGRATION TESTS — exercise pure logic modules end-to-end
+// ============================================================================
+
+describe('Auth Logic — Password Policy Integration', () => {
+  it('should reject passwords shorter than 12 characters', () => {
+    const result = validatePassword('Short1!abc');
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('12 characters')));
+  });
+
+  it('should reject passwords missing uppercase', () => {
+    const result = validatePassword('alllowercase1!');
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('uppercase')));
+  });
+
+  it('should reject passwords missing symbols', () => {
+    const result = validatePassword('NoSymbolHere1A');
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('symbol')));
+  });
+
+  it('should accept a compliant password', () => {
+    const result = validatePassword('StrongP@ss12345');
+    assert.equal(result.valid, true);
+    assert.equal(result.errors.length, 0);
+  });
+
+  it('should accumulate all failing rules', () => {
+    const result = validatePassword('a');
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.length >= 3);
+  });
+});
+
+describe('Auth Logic — Account Lockout Integration', () => {
+  it('should lock account after 5 failed attempts', () => {
+    const user = { failedAttempts: 0, lockedUntil: null };
+    for (let i = 0; i < MAX_ATTEMPTS - 1; i++) {
+      const r = processFailedLogin(user);
+      assert.equal(r.locked, false);
+    }
+    const final = processFailedLogin(user);
+    assert.equal(final.locked, true);
+    assert.ok(user.lockedUntil > Date.now());
+  });
+
+  it('should report locked state during lockout window', () => {
+    const now = Date.now();
+    const user = { lockedUntil: now + 60000 };
+    assert.equal(isAccountLocked(user, now), true);
+  });
+
+  it('should report unlocked after lockout expires', () => {
+    const now = Date.now();
+    const user = { lockedUntil: now - 1000 };
+    assert.equal(isAccountLocked(user, now), false);
+  });
+
+  it('successful login should reset failed attempts and lockout', () => {
+    const user = { failedAttempts: 3, lockedUntil: Date.now() + 60000 };
+    processSuccessfulLogin(user);
+    assert.equal(user.failedAttempts, 0);
+    assert.equal(user.lockedUntil, null);
+  });
+});
+
+describe('Auth Logic — Session Expiry Integration', () => {
+  it('should not expire a fresh session', () => {
+    const session = { lastActivity: Date.now() };
+    assert.equal(isSessionExpired(session), false);
+  });
+
+  it('should expire a session after 30 minutes of inactivity', () => {
+    const session = { lastActivity: Date.now() - SESSION_TIMEOUT - 1000 };
+    assert.equal(isSessionExpired(session), true);
+  });
+
+  it('should not expire a session at exactly the timeout boundary', () => {
+    const now = Date.now();
+    const session = { lastActivity: now - SESSION_TIMEOUT + 1000 };
+    assert.equal(isSessionExpired(session, now), false);
+  });
+});
+
+describe('Permissions Logic — Window & Consumption Integration', () => {
+  it('should create 15-min-before / 30-min-after permission window', () => {
+    const startTime = Date.now() + 3600000;
+    const window = calculatePermissionWindow(startTime);
+    assert.equal(window.windowStart, startTime - WINDOW_BEFORE_MS);
+    assert.equal(window.windowEnd, startTime + WINDOW_AFTER_MS);
+  });
+
+  it('should create single-use permission with maxEntries=1', () => {
+    const perm = createPermissionObject(Date.now(), 'single-use');
+    assert.equal(perm.maxEntries, 1);
+    assert.equal(perm.usedEntries, 0);
+    assert.equal(perm.status, 'active');
+  });
+
+  it('should create multi-use permission with maxEntries=5', () => {
+    const perm = createPermissionObject(Date.now(), 'multi-use');
+    assert.equal(perm.maxEntries, 5);
+  });
+
+  it('should consume a single-use permission and mark as consumed', () => {
+    const now = Date.now();
+    const perm = createPermissionObject(now, 'single-use');
+    const result = consumeEntry(perm, now);
+    assert.equal(result.success, true);
+    assert.equal(perm.status, 'consumed');
+    assert.equal(perm.usedEntries, 1);
+  });
+
+  it('should reject consumption of already consumed permission', () => {
+    const now = Date.now();
+    const perm = createPermissionObject(now, 'single-use');
+    consumeEntry(perm, now);
+    const result = consumeEntry(perm, now);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('consumed'));
+  });
+
+  it('should allow multiple consumptions on multi-use until exhausted', () => {
+    const now = Date.now();
+    const perm = createPermissionObject(now, 'multi-use');
+    for (let i = 0; i < 4; i++) {
+      const r = consumeEntry(perm, now);
+      assert.equal(r.success, true);
+      assert.equal(perm.status, 'active');
+    }
+    const last = consumeEntry(perm, now);
+    assert.equal(last.success, true);
+    assert.equal(perm.status, 'consumed');
+  });
+
+  it('should reject consumption outside time window', () => {
+    const farFuture = Date.now() + 999999999;
+    const perm = createPermissionObject(farFuture, 'single-use');
+    const result = consumeEntry(perm, Date.now());
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('window'));
+  });
+
+  it('should return correct status labels', () => {
+    const now = Date.now();
+    const active = createPermissionObject(now, 'single-use');
+    assert.equal(getPermissionStatusLabel(active, now), 'Active');
+
+    const consumed = createPermissionObject(now, 'single-use');
+    consumeEntry(consumed, now);
+    assert.equal(getPermissionStatusLabel(consumed, now), 'Consumed');
+
+    const future = createPermissionObject(now + 999999999, 'single-use');
+    assert.equal(getPermissionStatusLabel(future, now), 'Pending');
+  });
+});
+
+describe('Content Logic — Workflow & Compliance Integration', () => {
+  it('should enforce valid workflow transitions', () => {
+    assert.equal(canTransition('draft', 'review'), true);
+    assert.equal(canTransition('review', 'published'), true);
+    assert.equal(canTransition('review', 'draft'), true);
+    assert.equal(canTransition('published', 'archived'), true);
+    assert.equal(canTransition('published', 'draft'), true);
+    assert.equal(canTransition('archived', 'draft'), true);
+  });
+
+  it('should reject invalid workflow transitions', () => {
+    assert.equal(canTransition('draft', 'published'), false);
+    assert.equal(canTransition('draft', 'archived'), false);
+    assert.equal(canTransition('review', 'archived'), false);
+    assert.equal(canTransition('archived', 'published'), false);
+  });
+
+  it('should detect PII violations in content', () => {
+    const violations = scanContent('SSN: 123-45-6789');
+    assert.ok(violations.length > 0);
+    assert.ok(violations.some(v => v.ruleId === 'pii'));
+  });
+
+  it('should detect restricted words in content', () => {
+    const violations = scanContent('This content is banned and restricted');
+    assert.ok(violations.some(v => v.ruleId === 'profanity'));
+  });
+
+  it('should detect external URLs in content', () => {
+    const violations = scanContent('Visit https://example.com for details');
+    assert.ok(violations.some(v => v.ruleId === 'url'));
+  });
+
+  it('should return no violations for clean content', () => {
+    const violations = scanContent('This is a perfectly clean paragraph.');
+    assert.equal(violations.length, 0);
+  });
+
+  it('should generate line-by-line diff between two texts', () => {
+    const diff = generateDiff('line1\nline2\nline3', 'line1\nmodified\nline3');
+    const removed = diff.filter(d => d.type === 'removed');
+    const added = diff.filter(d => d.type === 'added');
+    assert.ok(removed.some(d => d.content === 'line2'));
+    assert.ok(added.some(d => d.content === 'modified'));
+  });
+});
+
+describe('Device Logic — Command Lifecycle Integration', () => {
+  it('should validate unlock reason minimum length', () => {
+    assert.equal(validateUnlockReason('short').valid, false);
+    assert.equal(validateUnlockReason('This is a valid reason for unlock').valid, true);
+  });
+
+  it('should create a pending command object', () => {
+    const cmd = createCommandObject(1, 'Test unlock reason', 'admin');
+    assert.equal(cmd.deviceId, 1);
+    assert.equal(cmd.status, 'pending');
+    assert.equal(cmd.retryCount, 0);
+    assert.equal(cmd.type, 'unlock');
+  });
+
+  it('should transition command to queued on ACK timeout', () => {
+    const cmd = createCommandObject(1, 'Test reason', 'admin');
+    applyAckTimeout(cmd);
+    assert.equal(cmd.status, 'queued');
+  });
+
+  it('should transition command to acknowledged on ACK', () => {
+    const cmd = createCommandObject(1, 'Test reason', 'admin');
+    applyAck(cmd);
+    assert.equal(cmd.status, 'acknowledged');
+    assert.ok(cmd.ackAt > 0);
+  });
+
+  it('should retry and succeed when device comes online', () => {
+    const now = Date.now();
+    const cmd = createCommandObject(1, 'Test reason', 'admin');
+    cmd.createdAt = now;
+    applyRetry(cmd, true, now + 10000);
+    assert.equal(cmd.status, 'acknowledged');
+    assert.equal(cmd.retryCount, 1);
+  });
+
+  it('should fail command after max retry duration exceeded', () => {
+    const now = Date.now();
+    const cmd = createCommandObject(1, 'Test reason', 'admin');
+    cmd.createdAt = now - MAX_RETRY_DURATION - 1000;
+    applyRetry(cmd, false, now);
+    assert.equal(cmd.status, 'failed');
+  });
+
+  it('should increment retry count on each failed retry', () => {
+    const now = Date.now();
+    const cmd = createCommandObject(1, 'Test reason', 'admin');
+    cmd.createdAt = now;
+    applyRetry(cmd, false, now + 10000);
+    assert.equal(cmd.retryCount, 1);
+    applyRetry(cmd, false, now + 20000);
+    assert.equal(cmd.retryCount, 2);
+  });
+});
+
+describe('Notification Logic — Template & Retry Integration', () => {
+  it('should resolve all standard templates without error', () => {
+    const vars = { reservationId: '1', zone: 'Lobby', doorName: 'Main', contentTitle: 'Doc', itemDescription: 'Badge', details: 'missing', username: 'user1', reason: 'policy' };
+    for (const templateId of Object.keys(TEMPLATES)) {
+      const msg = resolveTemplate(templateId, vars);
+      assert.ok(typeof msg === 'string' && msg.length > 0, `Template ${templateId} failed to resolve`);
+      assert.ok(!msg.includes('{'), `Template ${templateId} has unresolved placeholders: ${msg}`);
+    }
+  });
+
+  it('should create notification with correct initial state', () => {
+    const notif = createNotificationObject({
+      userId: 42,
+      templateId: 'reservation_approved',
+      variables: { reservationId: '7' },
+      type: 'success'
+    });
+    assert.equal(notif.userId, 42);
+    assert.equal(notif.status, 'pending');
+    assert.equal(notif.retryCount, 0);
+    assert.equal(notif.type, 'success');
+    assert.ok(notif.message.includes('7'));
+  });
+
+  it('should mark notification as delivered', () => {
+    const notif = createNotificationObject({ templateId: 'account_locked', variables: {} });
+    applyDelivery(notif);
+    assert.equal(notif.status, 'delivered');
+    assert.ok(notif.deliveredAt > 0);
+  });
+
+  it('should keep pending status when retries remain', () => {
+    const notif = createNotificationObject({ templateId: 'account_locked', variables: {} });
+    applyFailedDelivery(notif);
+    assert.equal(notif.retryCount, 1);
+    assert.equal(notif.status, 'pending');
+  });
+
+  it('should mark as failed only after MAX_RETRIES exhausted', () => {
+    const notif = createNotificationObject({ templateId: 'account_locked', variables: {} });
+    for (let i = 0; i < MAX_RETRIES; i++) {
+      applyFailedDelivery(notif);
+    }
+    assert.equal(notif.status, 'failed');
+    assert.equal(notif.retryCount, MAX_RETRIES);
+    assert.ok(notif.failedAt > 0);
+  });
+});
+
+describe('Audit Logic — Entry Creation Integration', () => {
+  it('should create audit entry with all required fields', () => {
+    const entry = createAuditEntry('user_login', 'admin', { userId: 1 }, null, null, 'admin');
+    assert.equal(entry.action, 'user_login');
+    assert.equal(entry.actor, 'admin');
+    assert.equal(entry.actorRole, 'admin');
+    assert.ok(entry.timestamp > 0);
+    assert.ok(entry.formattedTimestamp.length > 0);
+    assert.deepStrictEqual(entry.details, { userId: 1 });
+  });
+
+  it('should deep-clone before/after snapshots', () => {
+    const before = { status: 'pending' };
+    const after = { status: 'approved' };
+    const entry = createAuditEntry('reservation_approved', 'op', {}, before, after, 'operator');
+    before.status = 'mutated';
+    assert.equal(entry.before.status, 'pending');
+    assert.equal(entry.after.status, 'approved');
+  });
+
+  it('should format timestamp as MM/DD/YYYY 12-hour', () => {
+    const ts = new Date('2026-04-02T14:30:00').getTime();
+    const formatted = formatAuditTimestamp(ts);
+    assert.ok(/^\d{2}\/\d{2}\/\d{4} \d{1,2}:\d{2}:\d{2} (AM|PM)$/.test(formatted), `Bad format: ${formatted}`);
+    assert.ok(formatted.includes('2026'));
+    assert.ok(formatted.includes('PM'));
+  });
+
+  it('should default actor to system when null', () => {
+    const entry = createAuditEntry('test_action', null, {});
+    assert.equal(entry.actor, 'system');
+  });
+});
+
+describe('Map Logic — Spatial Operations Integration', () => {
+  it('should calculate correct distance between two points', () => {
+    const d = distanceFeet({ x: 0, y: 0 }, { x: 300, y: 400 });
+    assert.equal(d, 500);
+  });
+
+  it('should find POIs within radius', () => {
+    const pois = [
+      { id: 1, x: 100, y: 100 },
+      { id: 2, x: 5000, y: 5000 },
+      { id: 3, x: 150, y: 150 }
+    ];
+    const results = searchByRadius(pois, { x: 0, y: 0 }, 250);
+    assert.equal(results.length, 2);
+    assert.ok(results.some(p => p.id === 1));
+    assert.ok(results.some(p => p.id === 3));
+  });
+
+  it('should filter POIs by zone', () => {
+    const pois = [
+      { id: 1, zone: 'lobby' },
+      { id: 2, zone: 'dock' },
+      { id: 3, zone: 'lobby' }
+    ];
+    const results = searchByZone(pois, 'lobby');
+    assert.equal(results.length, 2);
+  });
+
+  it('should detect point inside polygon', () => {
+    const polygon = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+    assert.equal(pointInPolygon({ x: 50, y: 50 }, polygon), true);
+    assert.equal(pointInPolygon({ x: 200, y: 200 }, polygon), false);
+  });
+
+  it('should search POIs within polygon geofence', () => {
+    const pois = [
+      { id: 1, x: 50, y: 50 },
+      { id: 2, x: 200, y: 200 },
+      { id: 3, x: 75, y: 75 }
+    ];
+    const polygon = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+    const results = searchByPolygon(pois, polygon);
+    assert.equal(results.length, 2);
+  });
+
+  it('should calculate walk time from distance and speed', () => {
+    const time = calculateWalkTime(5280, 3); // 1 mile at 3 mph = 20 min
+    assert.equal(time, 20);
+  });
+
+  it('should plan a route with correct total distance and segments', () => {
+    const route = planRoute({ x: 0, y: 0 }, { x: 300, y: 400 });
+    assert.equal(route.totalDistanceFeet, 500);
+    assert.equal(route.segments.length, 1);
+    assert.equal(route.segments[0].distanceFeet, 500);
+  });
+
+  it('should plan a multi-waypoint route', () => {
+    const route = planRoute({ x: 0, y: 0 }, { x: 600, y: 0 }, [{ x: 300, y: 0 }]);
+    assert.equal(route.segments.length, 2);
+    assert.equal(route.totalDistanceFeet, 600);
+  });
+
+  it('should suggest nearest entry point', () => {
+    const pois = [
+      { id: 1, type: 'entry', x: 100, y: 0 },
+      { id: 2, type: 'entry', x: 500, y: 0 },
+      { id: 3, type: 'general', x: 10, y: 0 }
+    ];
+    const result = suggestNearestEntry(pois, { x: 0, y: 0 });
+    assert.equal(result.poi.id, 1);
+    assert.equal(result.distanceFeet, 100);
+  });
+
+  it('should return null when no entry points exist', () => {
+    const pois = [{ id: 1, type: 'general', x: 0, y: 0 }];
+    assert.equal(suggestNearestEntry(pois, { x: 0, y: 0 }), null);
+  });
+});
+
+describe('Cross-Module Integration — Permission Lifecycle', () => {
+  it('should enforce full lifecycle: create → consume → reject re-consume', () => {
+    const now = Date.now();
+    const perm = createPermissionObject(now, 'single-use');
+
+    assert.equal(getPermissionStatusLabel(perm, now), 'Active');
+    assert.equal(isWithinPermissionWindow(perm, now), true);
+
+    const r1 = consumeEntry(perm, now);
+    assert.equal(r1.success, true);
+    assert.equal(getPermissionStatusLabel(perm, now), 'Consumed');
+
+    const r2 = consumeEntry(perm, now);
+    assert.equal(r2.success, false);
+  });
+
+  it('should enforce full lifecycle for multi-use: 5 entries then reject', () => {
+    const now = Date.now();
+    const perm = createPermissionObject(now, 'multi-use');
+
+    for (let i = 0; i < 5; i++) {
+      assert.equal(consumeEntry(perm, now).success, true);
+    }
+    assert.equal(perm.status, 'consumed');
+    assert.equal(consumeEntry(perm, now).success, false);
+  });
+});
+
+describe('Cross-Module Integration — Role Permission Matrix', () => {
+  it('should enforce complete permission matrix across all roles', () => {
+    // Visitor: limited access
+    assert.equal(hasPermissionForRole('visitor', 'reservations.view'), true);
+    assert.equal(hasPermissionForRole('visitor', 'reservations.create'), true);
+    assert.equal(hasPermissionForRole('visitor', 'reservations.manage'), false);
+    assert.equal(hasPermissionForRole('visitor', 'devices.unlock'), false);
+    assert.equal(hasPermissionForRole('visitor', 'content.view'), false);
+
+    // Operator: device access, no content
+    assert.equal(hasPermissionForRole('operator', 'devices.unlock'), true);
+    assert.equal(hasPermissionForRole('operator', 'devices.view'), true);
+    assert.equal(hasPermissionForRole('operator', 'reservations.manage'), true);
+    assert.equal(hasPermissionForRole('operator', 'content.review'), false);
+
+    // Reviewer: content access, no devices
+    assert.equal(hasPermissionForRole('reviewer', 'content.view'), true);
+    assert.equal(hasPermissionForRole('reviewer', 'content.review'), true);
+    assert.equal(hasPermissionForRole('reviewer', 'content.moderate'), true);
+    assert.equal(hasPermissionForRole('reviewer', 'devices.unlock'), false);
+
+    // Admin: everything
+    assert.equal(hasPermissionForRole('admin', 'reservations.manage'), true);
+    assert.equal(hasPermissionForRole('admin', 'devices.unlock'), true);
+    assert.equal(hasPermissionForRole('admin', 'content.moderate'), true);
+    assert.equal(hasPermissionForRole('admin', 'anything.at.all'), true);
+  });
+
+  it('should return false for unknown roles', () => {
+    assert.equal(hasPermissionForRole('unknown_role', 'reservations.view'), false);
+  });
+});
+
+describe('Cross-Module Integration — Audit + Auth Lockout Flow', () => {
+  it('should produce audit-ready entries through a lockout sequence', () => {
+    const user = { failedAttempts: 0, lockedUntil: null };
+
+    // Simulate 5 failed logins
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      processFailedLogin(user);
+    }
+    assert.ok(user.lockedUntil > Date.now());
+
+    // Create audit entry for lockout
+    const entry = createAuditEntry('account_locked', 'testuser', { reason: 'max_failed_attempts' }, null, null, 'system');
+    assert.equal(entry.action, 'account_locked');
+    assert.equal(entry.details.reason, 'max_failed_attempts');
+    assert.ok(entry.formattedTimestamp.includes('/'));
+
+    // Verify lockout state
+    assert.equal(isAccountLocked(user), true);
+
+    // Simulate time passing beyond lockout
+    user.lockedUntil = Date.now() - 1;
+    assert.equal(isAccountLocked(user), false);
+
+    // Successful login resets
+    processSuccessfulLogin(user);
+    assert.equal(user.failedAttempts, 0);
+    assert.equal(user.lockedUntil, null);
   });
 });

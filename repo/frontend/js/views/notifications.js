@@ -4,7 +4,7 @@ import { getUserNotifications, retryFailedNotifications, getTemplates } from '..
 import Store from '../store.js';
 import { renderPaginatedTable } from '../components/table.js';
 import { showNotification } from '../components/notifications.js';
-import { showModal, closeModal } from '../components/modal.js';
+import { showModal, closeModal, escapeHTML } from '../components/modal.js';
 
 function formatRelativeDate(ts) {
   const now = Date.now();
@@ -45,7 +45,7 @@ function groupByDate(notifications) {
 }
 
 export async function renderNotifications(container) {
-  if (!requireAuth()) return;
+  if (!await requireAuth()) return;
   const user = getCurrentUser();
   const isAdmin = hasRole(['admin']);
 
@@ -121,7 +121,7 @@ export async function renderNotifications(container) {
                 ${typeBadge}${deliveryBadge}
                 <span class="inbox-item-time">${timeStr}</span>
               </div>
-              <div class="inbox-item-message">${n.message || n.templateId || ''}</div>
+              <div class="inbox-item-message">${escapeHTML(n.message || n.templateId || '')}</div>
             </div>
             <div class="inbox-item-actions">
               ${!n.read ? `<button class="btn btn-sm" data-action="read" data-id="${n.id}" title="Mark as read">Mark Read</button>` : ''}

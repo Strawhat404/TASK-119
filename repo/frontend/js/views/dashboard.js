@@ -3,9 +3,10 @@ import { requireAuth, getCurrentUser } from '../services/auth-service.js';
 import { createNotificationBadge } from '../components/notifications.js';
 import { processScheduledNotifications } from '../services/notifications.js';
 import { expirePermissions } from '../services/permissions.js';
+import { escapeHTML } from '../components/modal.js';
 
 export async function renderDashboard(container) {
-  if (!requireAuth()) return;
+  if (!await requireAuth()) return;
   const user = getCurrentUser();
 
   // Run scheduled tasks
@@ -39,7 +40,7 @@ export async function renderDashboard(container) {
     <div class="dashboard">
       <div class="view-header">
         <h1>Dashboard</h1>
-        <span class="user-badge">${user.username} (${user.role})</span>
+        <span class="user-badge">${escapeHTML(user.username)} (${escapeHTML(user.role)})</span>
       </div>
       <div class="stats-grid">
         ${cards.includes('reservations') ? `

@@ -3,13 +3,13 @@ import Store from '../store.js';
 import { requireRole, getCurrentUser } from '../services/auth-service.js';
 import { getAuditLogs, formatAuditTimestamp, addAuditLog } from '../services/audit.js';
 import { renderPaginatedTable } from '../components/table.js';
-import { showModal, closeModal } from '../components/modal.js';
+import { showModal, closeModal, escapeHTML } from '../components/modal.js';
 import { showNotification } from '../components/notifications.js';
 import { createNotification } from '../services/notifications.js';
 import { getRateLimits, createRateLimit, updateRateLimit, deleteRateLimit } from '../services/rate-limits.js';
 
 export async function renderAdmin(container) {
-  if (!requireRole(['admin'])) return;
+  if (!await requireRole(['admin'])) return;
   const user = getCurrentUser();
 
   const [users, auditLogs, reports, rateLimits] = await Promise.all([
@@ -216,13 +216,13 @@ export async function renderAdmin(container) {
         if (!log) return;
         showModal('Audit Entry', `
           <dl class="audit-detail">
-            <dt>Timestamp</dt><dd>${log.formattedTimestamp}</dd>
-            <dt>Actor</dt><dd>${log.actor}</dd>
-            <dt>Role</dt><dd>${log.actorRole}</dd>
-            <dt>Action</dt><dd>${log.action}</dd>
-            <dt>Details</dt><dd><pre>${JSON.stringify(log.details, null, 2)}</pre></dd>
-            ${log.before ? `<dt>Before</dt><dd><pre>${JSON.stringify(log.before, null, 2)}</pre></dd>` : ''}
-            ${log.after ? `<dt>After</dt><dd><pre>${JSON.stringify(log.after, null, 2)}</pre></dd>` : ''}
+            <dt>Timestamp</dt><dd>${escapeHTML(log.formattedTimestamp)}</dd>
+            <dt>Actor</dt><dd>${escapeHTML(log.actor)}</dd>
+            <dt>Role</dt><dd>${escapeHTML(log.actorRole)}</dd>
+            <dt>Action</dt><dd>${escapeHTML(log.action)}</dd>
+            <dt>Details</dt><dd><pre>${escapeHTML(JSON.stringify(log.details, null, 2))}</pre></dd>
+            ${log.before ? `<dt>Before</dt><dd><pre>${escapeHTML(JSON.stringify(log.before, null, 2))}</pre></dd>` : ''}
+            ${log.after ? `<dt>After</dt><dd><pre>${escapeHTML(JSON.stringify(log.after, null, 2))}</pre></dd>` : ''}
           </dl>
           <div class="form-actions"><button class="btn btn-secondary" id="close-audit-modal">Close</button></div>
         `);
@@ -295,12 +295,12 @@ export async function renderAdmin(container) {
       btn.addEventListener('click', async () => {
         const r = await DB.get('reports', Number(btn.dataset.id));
         if (!r) return;
-        showModal('Report: ' + r.title, `
-          <p><strong>Type:</strong> ${r.type} | <strong>Status:</strong> ${r.status}</p>
-          <p><strong>Description:</strong></p><p>${r.description}</p>
+        showModal('Report: ' + escapeHTML(r.title), `
+          <p><strong>Type:</strong> ${escapeHTML(r.type)} | <strong>Status:</strong> ${escapeHTML(r.status)}</p>
+          <p><strong>Description:</strong></p><p>${escapeHTML(r.description)}</p>
           <h4>Evidence Chain</h4>
-          <ul>${(r.evidenceChain || []).map(e => `<li>${new Date(e.at).toLocaleString()} — ${e.by}: ${e.note}</li>`).join('')}</ul>
-          ${r.decision ? `<p><strong>Decision:</strong> ${r.decision}</p>` : ''}
+          <ul>${(r.evidenceChain || []).map(e => `<li>${new Date(e.at).toLocaleString()} — ${escapeHTML(e.by)}: ${escapeHTML(e.note)}</li>`).join('')}</ul>
+          ${r.decision ? `<p><strong>Decision:</strong> ${escapeHTML(r.decision)}</p>` : ''}
           <div class="form-actions"><button class="btn btn-secondary" id="close-report-modal">Close</button></div>
         `);
         document.getElementById('close-report-modal').addEventListener('click', closeModal);

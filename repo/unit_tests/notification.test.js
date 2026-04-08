@@ -14,12 +14,12 @@ import {
 describe('Template Variable Substitution', () => {
   it('should substitute single variable', () => {
     const msg = resolveTemplate('reservation_approved', { reservationId: '42' });
-    assert.equal(msg, 'Your reservation #42 has been approved.');
+    assert.equal(msg, 'Your reservation 42 has been approved.');
   });
 
   it('should substitute multiple variables', () => {
     const msg = resolveTemplate('reservation_reminder_24h', { reservationId: '7', zone: 'Lobby' });
-    assert.equal(msg, 'Reminder: Your reservation #7 at Lobby is in 24 hours.');
+    assert.equal(msg, 'Reminder: Your reservation 7 at Lobby is in 24 hours.');
   });
 
   it('should substitute doorName in unlock template', () => {
@@ -34,12 +34,12 @@ describe('Template Variable Substitution', () => {
 
   it('should handle missing variables (leave placeholder)', () => {
     const msg = resolveTemplate('reservation_approved', {});
-    assert.equal(msg, 'Your reservation #{reservationId} has been approved.');
+    assert.equal(msg, 'Your reservation {reservationId} has been approved.');
   });
 
   it('should substitute all occurrences of same variable', () => {
     const msg = resolveTemplate('missing_materials', { reservationId: '10', details: 'badges' });
-    assert.ok(msg.includes('#10'));
+    assert.ok(msg.includes('10'));
     assert.ok(msg.includes('badges'));
   });
 

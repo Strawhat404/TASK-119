@@ -7,64 +7,78 @@
 ### store.js
 
 ```js
-store.getState()                    // Returns full state object
-store.setState(partial)             // Merges partial state, notifies subscribers
-store.subscribe(listener)           // Registers state change listener
-store.dispatch(action, payload)     // Dispatches named action
+store.get(key)                      // Returns value for key
+store.set(key, value)               // Sets key, notifies subscribers
+store.getAll()                      // Returns full state snapshot
+store.subscribe(listener)           // Registers state change listener; returns unsubscribe fn
 ```
 
 ### router.js
 
 ```js
-router.navigate(hash)               // Navigate to route (e.g. '#/reservations')
 router.register(hash, renderFn)     // Register route handler
-router.getCurrentRoute()            // Returns current hash fragment
+router.navigate(hash)               // Navigate to route (e.g. '#/reservations')
+router.currentRoute()               // Returns current hash fragment
 ```
 
-### db.js
+### database.js
 
 ```js
-db.get(store, id)                   // Get record by ID
-db.getAll(store)                    // Get all records from store
-db.put(store, record)               // Insert or update record
-db.delete(store, id)                // Delete record by ID
-db.query(store, indexName, value)   // Query by index
-db.clear(store)                     // Clear all records in store
+DB.get(store, id)                   // Get record by ID (auto-decrypts)
+DB.getAll(store)                    // Get all records from store (auto-decrypts)
+DB.getByIndex(store, index, value)  // Query by index, returns array
+DB.getOneByIndex(store, index, val) // Query by index, returns first match
+DB.add(store, record)               // Insert record (auto-encrypts)
+DB.put(store, record)               // Update record (auto-encrypts; rejected for audit_logs)
+DB.remove(store, id)                // Delete record (rejected for audit_logs)
+DB.clear(store)                     // Clear all records (rejected for audit_logs)
+DB.count(store)                     // Returns record count
 ```
 
 ### crypto.js
 
 ```js
-crypto.deriveKey(password, salt)    // PBKDF2 → AES-GCM key
-crypto.encrypt(key, plaintext)      // AES-GCM encrypt → base64 ciphertext
-crypto.decrypt(key, ciphertext)     // AES-GCM decrypt → plaintext
-crypto.hashPassword(password)       // Returns { hash, salt }
-crypto.verifyPassword(password, hash, salt)  // Returns boolean
-crypto.generateSalt()               // Returns random 16-byte salt (base64)
+crypto.encrypt(plaintext, password)            // AES-GCM encrypt with PBKDF2-derived key → base64 ciphertext
+crypto.decrypt(encoded, password)              // AES-GCM decrypt → plaintext
+crypto.hashPassword(password, salt?)           // PBKDF2 hash; returns { hash, salt } (both base64)
+crypto.verifyPassword(password, hash, salt)    // Returns boolean
+crypto.generateId()                            // Returns random 32-char hex string
+crypto.encryptObject(obj, password)            // JSON-serializes then encrypts → base64
+crypto.decryptObject(encrypted, password)      // Decrypts then JSON-parses → object
+crypto.deriveKEK(password)                     // PBKDF2 → Key Encryption Key (for wrapping/unwrapping DEK)
+crypto.generateDEK()                           // Generates random AES-256 Data Encryption Key
+crypto.wrapDEK(dek, kek)                       // Wraps DEK with KEK → { iv, wrapped } (base64)
+crypto.unwrapDEK(wrappedData, kek)             // Unwraps DEK with KEK → CryptoKey
+crypto.encryptRecord(record, cryptoKey)        // AES-GCM encrypt record with CryptoKey → { _encrypted, _payload }
+crypto.decryptRecord(encRecord, cryptoKey)     // AES-GCM decrypt record with CryptoKey → object
 ```
 
 ## Service Layer APIs
 
-### auth.js
+### auth-service.js
 
 ```js
-auth.register(username, password, role)   // Creates user, returns { success, userId }
-auth.login(username, password)            // Returns { success, token, user } or { locked, remainingMs }
-auth.logout()                             // Clears session token
-auth.getCurrentUser()                     // Returns current user from session
-auth.extendSession()                      // Resets idle timeout
-auth.checkSession()                       // Returns { valid, expiresIn }
-auth.validatePassword(password)           // Returns { valid, errors[] }
+register(username, password)              // Creates visitor user, returns { success, userId }
+registerWithRole(username, password, role) // Admin-only: creates user with specific role
+login(username, password)                 // Returns { success, session } or { error }
+logout()                                  // Clears session, verified user cache, encryption key
+getCurrentUser()                          // Returns DB-verified { id, username, role } or null
+hasRole(roles)                            // Checks role from verified cache; returns boolean
+requireAuth()                             // Async; verifies session user from DB by userId; fail-closed
+requireRole(roles)                        // Async; verifies user + role from DB by userId; fail-closed
+validatePassword(password)                // Returns { valid, errors[] }
 ```
 
 ### permissions.js
 
 ```js
-permissions.create(reservationId, policy)  // Creates entry permission
-permissions.getForReservation(reservationId) // Returns permission record
-permissions.consume(permissionId)          // Marks single-use as used, increments multi-use counter
-permissions.getStatus(permissionId)        // Returns 'active'|'used'|'expired'|'pending'
-permissions.isValid(permissionId)          // Returns boolean (within time window + not exhausted)
+createEntryPermission(reservation, policy)              // Creates time-bound entry permission from reservation
+getPermissionsForReservation(reservationId, actor)      // Returns permissions; requires actor for ownership check (returns [] if unauthorized)
+consumeEntry(permissionId, actor)                       // Marks single-use as used or increments multi-use counter; validates actor ownership
+expirePermissions()                                     // Expires all active permissions past their window
+getPermissionStatusLabel(permission)                    // Returns human-readable status label
+calculatePermissionWindow(startTime)                    // Returns { windowStart, windowEnd }
+isWithinPermissionWindow(permission)                    // Returns boolean
 ```
 
 ### device.js
@@ -91,12 +105,14 @@ map.distanceFt(x1, y1, x2, y2)            // Returns distance in feet
 ### notifications.js
 
 ```js
-notifications.send(templateId, vars, userId)  // Renders template, queues notification
-notifications.getInbox(userId)                // Returns notification list
-notifications.markRead(notificationId)        // Marks as read
-notifications.retry(notificationId)           // Retries failed notification (max 3)
-notifications.scheduleReminder(reservationId) // Schedules 24h and 1h reminders
-notifications.renderTemplate(templateId, vars) // Returns rendered string
+createNotification({ userId, templateId, variables, type, scheduledFor })  // Renders template via lib, stores and attempts delivery
+deliverNotification(notification)                                          // Attempts delivery; applies delivered/failed status
+retryFailedNotifications()                                                 // Retries pending notifications with retryCount > 0 and < MAX_RETRIES
+processScheduledNotifications()                                            // Delivers all due scheduled notifications
+scheduleReservationReminders(reservation)                                  // Schedules 24h and 1h reminder notifications
+getUserNotifications(userId)                                               // Returns notifications for user (or all if no userId)
+getTemplates()                                                             // Returns copy of template registry
+resolveTemplate(templateId, variables)                                     // Re-exported from lib: renders template string with {var} substitution
 ```
 
 ### cms.js
@@ -124,25 +140,27 @@ audit.getByAction(action)                  // Returns entries by action type
 ### importexport.js
 
 ```js
-importexport.exportAll(encrypt, password)  // Downloads encrypted/plain JSON bundle
-importexport.importBundle(file, password)  // Imports and restores all stores
+exportData(password)                       // Returns encrypted JSON bundle (password required; plaintext export rejected)
+importData(fileContent, password)          // Decrypts and restores stores (password required; plaintext import rejected); audit_logs are merge-only (append, not replace)
+downloadJSON(data, filename)              // Triggers browser download of JSON blob
+pickFile()                                // Opens file picker; returns file content string
 ```
 
 ## IndexedDB Schema
 
 ### users
 ```
-{ id, username, passwordHash, salt, role, createdAt, failedAttempts, lockedUntil, banned }
+{ id, username, passwordHash, passwordSalt, role, failedAttempts, lockedUntil, banned, createdAt }
 ```
 
 ### reservations
 ```
-{ id, userId, title, startTime, endTime, status, createdAt }
+{ id, userId, visitorName, date, time, zone, entryPolicy, notes, status, createdAt }
 ```
 
-### permissions
+### entry_permissions
 ```
-{ id, reservationId, policy, usesRemaining, startWindow, endWindow, status }
+{ id, reservationId, userId, zone, policy, maxEntries, usedEntries, windowStart, windowEnd, status, createdAt }
 ```
 
 ### devices
@@ -180,9 +198,19 @@ importexport.importBundle(file, password)  // Imports and restores all stores
 { id, userId, templateId, vars, renderedBody, status, attempts, createdAt, deliveredAt }
 ```
 
-### notification_templates
+### rate_limits
 ```
-{ id, name, subject, body, variables[] }
+{ id, scope, action, maxCount, windowSec, enabled, createdAt, updatedAt }
+```
+
+### zones
+```
+{ id }
+```
+
+### geofences
+```
+{ id, name, zone, points[], createdAt }
 ```
 
 ## Hash Routes

@@ -88,13 +88,13 @@ export async function expirePermissions() {
  * Returns [] (not an error) for unauthorized access to avoid leaking existence.
  */
 export async function getPermissionsForReservation(reservationId, actor = null) {
-  if (actor) {
-    const reservation = await DB.get('reservations', reservationId);
-    if (reservation) {
-      const isOwner = reservation.userId === actor.id;
-      const isPrivileged = actor.role === 'admin' || actor.role === 'operator';
-      if (!isOwner && !isPrivileged) return [];
-    }
-  }
+  // Enforce actor for authorization check — callers must pass the current user
+  if (!actor) return [];
+  const reservation = await DB.get('reservations', reservationId);
+  // If reservation not found, return empty to prevent orphaned permission enumeration
+  if (!reservation) return [];
+  const isOwner = reservation.userId === actor.id;
+  const isPrivileged = actor.role === 'admin' || actor.role === 'operator';
+  if (!isOwner && !isPrivileged) return [];
   return DB.getByIndex('entry_permissions', 'reservationId', reservationId);
 }

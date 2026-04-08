@@ -100,11 +100,10 @@ const Crypto = {
   },
 
   /**
-   * Derive a CryptoKey from the user's password for at-rest encryption.
-   * Uses a fixed application salt so the same password always produces the same key.
-   * The key is held in memory only — never persisted.
+   * Derive a Key Encryption Key (KEK) from the user's password.
+   * Used to wrap/unwrap the shared Data Encryption Key (DEK).
    */
-  async deriveSessionKey(password) {
+  async deriveKEK(password) {
     const enc = new TextEncoder();
     const salt = enc.encode(ENC_AT_REST_SALT);
     const keyMaterial = await crypto.subtle.importKey(
@@ -115,6 +114,47 @@ const Crypto = {
       keyMaterial,
       { name: 'AES-GCM', length: 256 },
       false,
+      ['wrapKey', 'unwrapKey']
+    );
+  },
+
+  /**
+   * Generate a random Data Encryption Key (DEK) for at-rest encryption.
+   * Created once during initial setup; shared across all users via key wrapping.
+   */
+  async generateDEK() {
+    return crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 },
+      true,  // extractable — required for wrapKey
+      ['encrypt', 'decrypt']
+    );
+  },
+
+  /**
+   * Wrap (encrypt) the DEK with a user's KEK for persistent storage.
+   * Returns { iv, wrapped } as base64 strings.
+   */
+  async wrapDEK(dek, kek) {
+    const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+    const wrapped = await crypto.subtle.wrapKey('raw', dek, kek, { name: 'AES-GCM', iv });
+    return {
+      iv: btoa(String.fromCharCode(...iv)),
+      wrapped: btoa(String.fromCharCode(...new Uint8Array(wrapped)))
+    };
+  },
+
+  /**
+   * Unwrap (decrypt) the DEK using a user's KEK.
+   * Returns a CryptoKey suitable for encrypt/decrypt operations.
+   */
+  async unwrapDEK(wrappedData, kek) {
+    const iv = Uint8Array.from(atob(wrappedData.iv), c => c.charCodeAt(0));
+    const wrapped = Uint8Array.from(atob(wrappedData.wrapped), c => c.charCodeAt(0));
+    return crypto.subtle.unwrapKey(
+      'raw', wrapped, kek,
+      { name: 'AES-GCM', iv },
+      { name: 'AES-GCM', length: 256 },
+      true,  // extractable — so admin can re-wrap for new users
       ['encrypt', 'decrypt']
     );
   },

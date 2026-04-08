@@ -58,9 +58,14 @@ export async function getAllPOIs() {
   return DB.getAll('pois');
 }
 
+function sanitizeName(name) {
+  if (typeof name !== 'string') return '';
+  return name.replace(/[<>"'&]/g, '').trim().slice(0, 200);
+}
+
 export async function saveGeofence(geofence) {
   const record = {
-    name: geofence.name,
+    name: sanitizeName(geofence.name),
     zone: geofence.zone || null,
     points: geofence.points,
     createdAt: Date.now()

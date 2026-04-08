@@ -2,9 +2,10 @@ import Crypto from '../crypto.js';
 import { requireAuth, getCurrentUser, hasRole, logout } from '../services/auth-service.js';
 import { exportData, importData, downloadJSON, pickFile } from '../services/importexport.js';
 import { showNotification } from '../components/notifications.js';
+import { escapeHTML } from '../components/modal.js';
 
 export async function renderSettings(container) {
-  if (!requireAuth()) return;
+  if (!await requireAuth()) return;
   const user = getCurrentUser();
   const isAdmin = hasRole(['admin']);
 
@@ -19,7 +20,7 @@ export async function renderSettings(container) {
     <div class="settings-grid">
       <section class="settings-section">
         <h2>Session</h2>
-        <p>Logged in as: <strong>${user.username}</strong> (${user.role})</p>
+        <p>Logged in as: <strong>${escapeHTML(user.username)}</strong> (${escapeHTML(user.role)})</p>
         <p>Last activity: ${session?.lastActivity ? new Date(session.lastActivity).toLocaleString() : 'N/A'}</p>
         <button class="btn btn-danger" id="logout-btn">Logout</button>
       </section>
@@ -110,47 +111,49 @@ export async function renderSettings(container) {
     }
   });
 
-  document.getElementById('export-btn').addEventListener('click', async () => {
-    const pw = document.getElementById('backup-password').value.trim();
-    if (!pw) {
-      showNotification('A backup password is required before exporting.', 'error');
-      document.getElementById('backup-password').focus();
-      return;
-    }
-    try {
-      const data = await exportData(pw);
-      const filename = `harborgate-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      downloadJSON(data, filename);
-      showNotification('Data exported (encrypted)', 'success');
-    } catch (err) {
-      showNotification('Export failed: ' + err.message, 'error');
-    }
-  });
+  if (isAdmin) {
+    document.getElementById('export-btn').addEventListener('click', async () => {
+      const pw = document.getElementById('backup-password').value.trim();
+      if (!pw) {
+        showNotification('A backup password is required before exporting.', 'error');
+        document.getElementById('backup-password').focus();
+        return;
+      }
+      try {
+        const data = await exportData(pw);
+        const filename = `harborgate-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        downloadJSON(data, filename);
+        showNotification('Data exported (encrypted)', 'success');
+      } catch (err) {
+        showNotification('Export failed: ' + err.message, 'error');
+      }
+    });
 
-  document.getElementById('import-btn').addEventListener('click', async () => {
-    const pw = document.getElementById('backup-password').value.trim();
-    if (!pw) {
-      showNotification('A backup password is required before importing.', 'error');
-      document.getElementById('backup-password').focus();
-      return;
-    }
-    const content = await pickFile();
-    if (!content) return;
-    try {
-      const result = await importData(content, pw);
-      showNotification(`Imported ${result.storesImported} stores successfully`, 'success');
-    } catch (err) {
-      showNotification('Import failed: ' + err.message, 'error');
-    }
-  });
+    document.getElementById('import-btn').addEventListener('click', async () => {
+      const pw = document.getElementById('backup-password').value.trim();
+      if (!pw) {
+        showNotification('A backup password is required before importing.', 'error');
+        document.getElementById('backup-password').focus();
+        return;
+      }
+      const content = await pickFile();
+      if (!content) return;
+      try {
+        const result = await importData(content, pw);
+        showNotification(`Imported ${result.storesImported} stores successfully`, 'success');
+      } catch (err) {
+        showNotification('Import failed: ' + err.message, 'error');
+      }
+    });
 
-  document.getElementById('clear-all-data').addEventListener('click', async () => {
-    const { default: DB } = await import('../database.js');
-    for (const store of ['users', 'roles', 'rate_limits', 'reservations', 'entry_permissions', 'devices', 'pois', 'content', 'reports', 'audit_logs', 'notifications', 'command_outbox', 'zones', 'geofences']) {
-      await DB.clear(store);
-    }
-    logout();
-    showNotification('All data cleared', 'success');
-    window.location.hash = '/login';
-  });
+    document.getElementById('clear-all-data').addEventListener('click', async () => {
+      const { default: DB } = await import('../database.js');
+      for (const store of ['users', 'roles', 'rate_limits', 'reservations', 'entry_permissions', 'devices', 'pois', 'content', 'reports', 'notifications', 'command_outbox', 'zones', 'geofences']) {
+        await DB.clear(store);
+      }
+      logout();
+      showNotification('All data cleared', 'success');
+      window.location.hash = '/login';
+    });
+  }
 }

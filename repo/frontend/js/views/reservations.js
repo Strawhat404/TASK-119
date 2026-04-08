@@ -1,6 +1,6 @@
 import DB from '../database.js';
 import Store from '../store.js';
-import { requireAuth, getCurrentUser, hasRole } from '../services/auth-service.js';
+import { requireRole, getCurrentUser, hasRole } from '../services/auth-service.js';
 import { createEntryPermission, getPermissionsForReservation, getPermissionStatusLabel } from '../services/permissions.js';
 import { scheduleReservationReminders, createNotification } from '../services/notifications.js';
 import { addAuditLog } from '../services/audit.js';
@@ -10,7 +10,7 @@ import { renderPaginatedTable } from '../components/table.js';
 import { showNotification } from '../components/notifications.js';
 
 export async function renderReservations(container) {
-  if (!requireAuth()) return;
+  if (!await requireRole(['visitor', 'operator', 'admin'])) return;
   const user = getCurrentUser();
   const canManage = hasRole(['admin', 'operator']);
 
@@ -61,7 +61,7 @@ export async function renderReservations(container) {
 
   // Attach permission status
   for (const r of reservations) {
-    const perms = await getPermissionsForReservation(r.id);
+    const perms = await getPermissionsForReservation(r.id, user);
     r.permissionStatus = perms.length > 0
       ? perms.map(p => `<span class="badge badge-${p.status}">${getPermissionStatusLabel(p)}</span>`).join(' ')
       : '<span class="badge badge-pending">None</span>';
@@ -101,7 +101,11 @@ export async function renderReservations(container) {
         const before = { ...r };
         r.status = 'approved';
         await DB.put('reservations', r);
-        await createEntryPermission(r, r.entryPolicy || 'single-use');
+        // Only create permission if none exists yet for this reservation
+        const existingPerms = await getPermissionsForReservation(r.id, user);
+        if (existingPerms.length === 0) {
+          await createEntryPermission(r, r.entryPolicy || 'single-use');
+        }
         await scheduleReservationReminders(r);
         await createNotification({
           userId: r.userId,
@@ -156,7 +160,7 @@ export async function renderReservations(container) {
 
     document.querySelectorAll('[data-action="view-perm"]').forEach(btn => {
       btn.addEventListener('click', async () => {
-        const perms = await getPermissionsForReservation(Number(btn.dataset.id));
+        const perms = await getPermissionsForReservation(Number(btn.dataset.id), user);
         showModal('Entry Permissions', perms.length === 0
           ? '<p>No permissions generated yet. Reservation must be approved first.</p><div class="form-actions"><button class="btn btn-secondary" id="close-perm-modal">Close</button></div>'
           : `<table class="data-table">
@@ -222,8 +226,8 @@ export async function renderReservations(container) {
 
       // Rate-limit: user-scoped and global reservation creation rules
       const [userRl, globalRl] = await Promise.all([
-        checkRateLimit('user', String(user.id), 'reservation'),
-        checkRateLimit('global', '', 'reservation')
+        checkRateLimit('user', String(user.id), 'reservation_created'),
+        checkRateLimit('global', '', 'reservation_created')
       ]);
       if (!userRl.allowed || !globalRl.allowed) {
         showNotification('Reservation rate limit reached. Please try again later.', 'error');
@@ -233,8 +237,10 @@ export async function renderReservations(container) {
       data.userId = user.id;
       data.status = 'pending';
       data.createdAt = Date.now();
-      await DB.add('reservations', data);
-      await addAuditLog('reservation_created', user.username, { visitorName: data.visitorName, zone: data.zone });
+      const reservationId = await DB.add('reservations', data);
+      data.id = reservationId;
+      // Entry permission is generated on approval, not creation, to avoid duplicates
+      await addAuditLog('reservation_created', user.username, { reservationId, visitorName: data.visitorName, zone: data.zone });
       showNotification('Reservation created', 'success');
       closeModal();
       renderReservations(container);

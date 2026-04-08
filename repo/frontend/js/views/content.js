@@ -8,7 +8,7 @@ import { addAuditLog } from '../services/audit.js';
 import { createNotification } from '../services/notifications.js';
 import { checkRateLimit } from '../services/rate-limits.js';
 import Store from '../store.js';
-import { showModal, closeModal } from '../components/modal.js';
+import { showModal, closeModal, escapeHTML } from '../components/modal.js';
 import { renderPaginatedTable } from '../components/table.js';
 import { showNotification } from '../components/notifications.js';
 
@@ -31,7 +31,7 @@ function scanContent(text) {
 }
 
 export async function renderContent(container) {
-  if (!requireRole(['admin', 'reviewer'])) return;
+  if (!await requireRole(['admin', 'reviewer'])) return;
   const user = getCurrentUser();
   const isReviewer = hasRole(['admin', 'reviewer']);
 
@@ -129,11 +129,11 @@ export async function renderContent(container) {
         const item = await DB.get('content', Number(btn.dataset.id));
         if (!item) return;
         showModal('Content Details', `
-          <h3>${item.title}</h3>
-          <p><strong>State:</strong> ${item.workflowState} | <strong>Version:</strong> ${item.version} | <strong>Locale:</strong> ${item.locale}</p>
-          <div class="content-body">${item.body}</div>
-          ${item.violations?.length ? `<h4>Violations</h4><ul>${item.violations.map(v => `<li>${v.label}: ${v.matches} match(es)</li>`).join('')}</ul>` : ''}
-          ${Object.keys(item.variants || {}).length ? `<h4>Variants</h4><ul>${Object.entries(item.variants).map(([loc, v]) => `<li><strong>${loc}:</strong> ${v.title}</li>`).join('')}</ul>` : ''}
+          <h3>${escapeHTML(item.title)}</h3>
+          <p><strong>State:</strong> ${escapeHTML(item.workflowState)} | <strong>Version:</strong> ${escapeHTML(item.version)} | <strong>Locale:</strong> ${escapeHTML(item.locale)}</p>
+          <div class="content-body">${escapeHTML(item.body)}</div>
+          ${item.violations?.length ? `<h4>Violations</h4><ul>${item.violations.map(v => `<li>${escapeHTML(v.label)}: ${escapeHTML(v.matches)} match(es)</li>`).join('')}</ul>` : ''}
+          ${Object.keys(item.variants || {}).length ? `<h4>Variants</h4><ul>${Object.entries(item.variants).map(([loc, v]) => `<li><strong>${escapeHTML(loc)}:</strong> ${escapeHTML(v.title)}</li>`).join('')}</ul>` : ''}
           <div class="form-actions"><button class="btn btn-secondary" id="close-content-modal">Close</button></div>
         `);
         document.getElementById('close-content-modal').addEventListener('click', closeModal);
@@ -144,13 +144,13 @@ export async function renderContent(container) {
       btn.addEventListener('click', async () => {
         const item = await DB.get('content', Number(btn.dataset.id));
         if (!item) return;
-        showModal('Version History: ' + item.title, `
+        showModal('Version History: ' + escapeHTML(item.title), `
           <table class="data-table">
             <thead><tr><th>Ver</th><th>State</th><th>Changed By</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>${item.history.map(h => `<tr>
-              <td>${h.version}</td>
-              <td>${h.state}</td>
-              <td>${h.changedBy}</td>
+              <td>${escapeHTML(h.version)}</td>
+              <td>${escapeHTML(h.state)}</td>
+              <td>${escapeHTML(h.changedBy)}</td>
               <td>${new Date(h.changedAt).toLocaleString()}</td>
               <td>
                 <button class="btn btn-sm" data-action="diff" data-content-id="${item.id}" data-version="${h.version}">Diff</button>
@@ -170,7 +170,7 @@ export async function renderContent(container) {
             if (entry && prev) {
               const diff = generateDiff(prev.body, entry.body);
               showModal(`Diff v${ver - 1} → v${ver}`, `
-                <div class="diff-view">${diff.map(d => `<div class="diff-${d.type}">${d.type === 'added' ? '+' : d.type === 'removed' ? '-' : ' '} ${d.content}</div>`).join('')}</div>
+                <div class="diff-view">${diff.map(d => `<div class="diff-${d.type}">${d.type === 'added' ? '+' : d.type === 'removed' ? '-' : ' '} ${escapeHTML(d.content)}</div>`).join('')}</div>
                 <div class="form-actions"><button class="btn btn-secondary" id="close-diff">Close</button></div>
               `);
               document.getElementById('close-diff').addEventListener('click', closeModal);
@@ -220,7 +220,7 @@ export async function renderContent(container) {
           return;
         }
         const item = await reviewContent(Number(btn.dataset.id), 'approve', user.username);
-        await createNotification({ userId: item.author, templateId: 'content_published', variables: { contentTitle: item.title }, type: 'success' });
+        await createNotification({ userId: item.authorId, templateId: 'content_published', variables: { contentTitle: item.title }, type: 'success' });
         showNotification('Content published', 'success');
         renderContent(container);
       });
@@ -258,10 +258,10 @@ export async function renderContent(container) {
     showModal(title, `
       <form id="content-form">
         <label class="form-label">Title
-          <input type="text" name="title" class="input" value="${existing?.title || ''}" required />
+          <input type="text" name="title" class="input" value="${escapeHTML(existing?.title || '')}" required />
         </label>
         <label class="form-label">Body
-          <textarea name="body" class="input" rows="6" required>${existing?.body || ''}</textarea>
+          <textarea name="body" class="input" rows="6" required>${escapeHTML(existing?.body || '')}</textarea>
         </label>
         <label class="form-label">Locale
           <select name="locale" class="input">
@@ -273,7 +273,7 @@ export async function renderContent(container) {
           </select>
         </label>
         <label class="form-label">Source
-          <input type="text" name="source" class="input" value="${existing?.source || ''}" placeholder="e.g., manual, import" />
+          <input type="text" name="source" class="input" value="${escapeHTML(existing?.source || '')}" placeholder="e.g., manual, import" />
         </label>
         <fieldset class="variant-fieldset">
           <legend>Multilingual Variant (optional)</legend>
@@ -335,7 +335,8 @@ export async function renderContent(container) {
           source: data.source,
           locale: data.locale,
           variants,
-          author: user.username
+          author: user.username,
+          authorId: user.id
         });
         record.violations = violations;
         record.violationCount = violations.length;

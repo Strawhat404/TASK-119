@@ -29,7 +29,8 @@ HarborGate is a browser-based Visitor Access & Content Compliance system. It run
 │  notifications, audit, importexport     │
 ├─────────────────────────────────────────┤
 │         Core Modules                    │
-│  store.js, router.js, db.js, crypto.js  │
+│  store.js, router.js, database.js,      │
+│  crypto.js                              │
 ├─────────────────────────────────────────┤
 │         Browser Storage                 │
 │  IndexedDB (primary) + LocalStorage     │
@@ -40,16 +41,16 @@ HarborGate is a browser-based Visitor Access & Content Compliance system. It run
 ## Core Modules
 
 ### store.js
-Lightweight reactive state store. Coordinates Views, Modals, Drawers, and Table pagination/sorting. Provides `getState()`, `setState()`, and `subscribe()`.
+Lightweight reactive state store. Coordinates Views, Modals, Drawers, and Table pagination/sorting. Provides `get(key)`, `set(key, value)`, `getAll()`, and `subscribe(listener)`.
 
 ### router.js
-Hash-based router. Maps URL fragments to view render functions. Handles role-based route guards.
+Hash-based router. Maps URL fragments to view render functions. Provides `register(hash, renderFn)`, `navigate(hash)`, and `currentRoute()`.
 
-### db.js
-IndexedDB wrapper. Provides async CRUD operations for all object stores. Handles database versioning and migrations.
+### database.js
+IndexedDB wrapper with encryption at rest. Provides async CRUD (`get`, `getAll`, `getByIndex`, `getOneByIndex`, `add`, `put`, `remove`, `clear`, `count`). The `audit_logs` store is append-only — `put`, `remove`, and `clear` are rejected for it.
 
 ### crypto.js
-Web Crypto API helpers. PBKDF2 key derivation from user password. AES-GCM encryption/decryption for data at rest and import/export bundles.
+Web Crypto API helpers. PBKDF2 key derivation for password hashing and key encryption. AES-GCM encryption/decryption for data at rest (via shared DEK wrapped per-user with password-derived KEK) and import/export bundles.
 
 ## Data Model (IndexedDB Stores)
 
@@ -58,7 +59,7 @@ Web Crypto API helpers. PBKDF2 key derivation from user password. AES-GCM encryp
 | users | id | User accounts with hashed passwords, roles, lockout state |
 | roles | id | Role definitions and permission sets |
 | reservations | id | Visit reservations with time windows |
-| permissions | id | Time-bound entry permissions linked to reservations |
+| entry_permissions | id | Time-bound entry permissions linked to reservations |
 | devices | id | Door/device registry |
 | command_outbox | id | Queued device commands for offline fault tolerance |
 | pois | id | Points of interest with feet-based coordinates |
@@ -66,13 +67,16 @@ Web Crypto API helpers. PBKDF2 key derivation from user password. AES-GCM encryp
 | reports | id | Compliance reports with evidence chains |
 | audit_logs | id | Immutable audit trail entries |
 | notifications | id | Notification inbox items |
-| notification_templates | id | Templates with variable placeholders |
+| rate_limits | id | Admin-configurable rate-limit rules |
+| zones | id | Zone definitions |
+| geofences | id | Polygon geofence boundaries |
 
 ## Authentication & Sessions
 
 - Local-only username/password authentication
 - Password policy: min 12 chars, 1 upper, 1 lower, 1 number, 1 symbol
-- PBKDF2 key derivation (100,000 iterations, SHA-256)
+- PBKDF2 key derivation (100,000 iterations, SHA-256) for password hashing and KEK derivation
+- Shared Data Encryption Key (DEK) wrapped per-user with password-derived KEK for cross-role data access
 - 5 failed attempts → 15-minute account lockout
 - Session token stored in LocalStorage
 - 30-minute idle timeout; "Extend Session" prompt at 25 minutes
@@ -89,7 +93,7 @@ Web Crypto API helpers. PBKDF2 key derivation from user password. AES-GCM encryp
 
 ## Entry Permissions
 
-- Auto-generated when a reservation is created
+- Auto-generated when a reservation is approved
 - Time window: 15 min before → 30 min after reservation start
 - Single-use: consumed on first successful unlock
 - Multi-use: up to 5 entries allowed
@@ -138,7 +142,8 @@ Draft → Review → Published → Archived
 ## Import/Export
 
 - Browser-side Blob downloads and file pickers
-- Optional AES-GCM encrypted JSON bundles
+- Mandatory AES-GCM encrypted JSON bundles (password required for both export and import)
+- Plaintext export/import is not permitted
 - Covers all IndexedDB stores for full backup/migration
 
 ## Deployment

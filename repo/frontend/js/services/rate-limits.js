@@ -4,7 +4,7 @@
  *
  * A rule defines:
  *   - scope     : 'user' | 'zone' | 'device' | 'global'
- *   - action    : e.g. 'unlock', 'reservation', 'login', 'content_publish'
+ *   - action    : e.g. 'unlock_command', 'reservation_created', 'user_login', 'content_workflow'
  *   - maxCount  : maximum number of occurrences allowed
  *   - windowSec : rolling time window in seconds
  *   - enabled   : boolean
@@ -14,6 +14,15 @@
  */
 import DB from '../database.js';
 import { addAuditLog } from './audit.js';
+import { getCurrentUser } from './auth-service.js';
+
+function requireAdminRole() {
+  const user = getCurrentUser();
+  if (!user || user.role !== 'admin') {
+    throw new Error('Unauthorized: rate-limit management requires admin role');
+  }
+  return user;
+}
 
 // --- CRUD ---
 
@@ -27,6 +36,7 @@ export async function getRateLimitByScope(scope, action) {
 }
 
 export async function createRateLimit(rule, actorUsername) {
+  requireAdminRole();
   if (!rule.scope || !rule.action || !rule.maxCount || !rule.windowSec) {
     return { success: false, error: 'scope, action, maxCount and windowSec are required' };
   }
@@ -52,6 +62,7 @@ export async function createRateLimit(rule, actorUsername) {
 }
 
 export async function updateRateLimit(id, changes, actorUsername) {
+  requireAdminRole();
   const rule = await DB.get('rate_limits', id);
   if (!rule) return { success: false, error: 'Rule not found' };
 
@@ -67,6 +78,7 @@ export async function updateRateLimit(id, changes, actorUsername) {
 }
 
 export async function deleteRateLimit(id, actorUsername) {
+  requireAdminRole();
   const rule = await DB.get('rate_limits', id);
   if (!rule) return { success: false, error: 'Rule not found' };
 

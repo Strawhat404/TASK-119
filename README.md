@@ -43,7 +43,7 @@ Harborgate/
 │   │   └── js/
 │   │       ├── store.js
 │   │       ├── router.js
-│   │       ├── db.js
+│   │       ├── database.js
 │   │       ├── crypto.js
 │   │       ├── views/
 │   │       ├── components/

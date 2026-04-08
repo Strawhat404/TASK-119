@@ -24,12 +24,22 @@ import {
   ROLE_DEFINITIONS,
   hasPermissionForRole
 } from '../lib/auth-logic.js';
-import { setEncryptionKey, clearEncryptionKey } from '../database.js';
+import { setEncryptionKey, clearEncryptionKey, getEncryptionKey } from '../database.js';
 
 const SESSION_KEY = 'hg_session';
+const WRAPPED_KEYS_KEY = 'hg_wrapped_keys';
+
+function getWrappedKeys() {
+  try { return JSON.parse(localStorage.getItem(WRAPPED_KEYS_KEY) || '{}'); } catch { return {}; }
+}
+
+function setWrappedKeys(keys) {
+  localStorage.setItem(WRAPPED_KEYS_KEY, JSON.stringify(keys));
+}
 
 let idleTimer = null;
 let warningTimer = null;
+let _verifiedUser = null; // DB-verified user; set by requireRole, cleared on logout
 
 function validatePassword(password) {
   return _validatePassword(password);
@@ -64,7 +74,8 @@ async function register(username, password, role = 'visitor') {
   return { success: true, userId: id };
 }
 
-async function registerWithRole(username, password, role) {
+// Internal helper — creates a user with the given role. No auth check; callers must gate access.
+async function _createUserWithRole(username, password, role, auditActor) {
   const validation = validatePassword(password);
   if (!validation.valid) return { success: false, errors: validation.errors };
 
@@ -84,14 +95,39 @@ async function registerWithRole(username, password, role) {
   };
 
   const id = await DB.add('users', user);
-  await addAuditLog('user_register', 'system', { userId: id, username, role });
+
+  // Wrap the shared DEK for this new user using their password-derived KEK
+  const kek = await Crypto.deriveKEK(password);
+  const wrappedKeys = getWrappedKeys();
+  const currentDEK = getEncryptionKey();
+  if (currentDEK) {
+    // Admin is logged in — wrap existing DEK for the new user
+    const wrappedData = await Crypto.wrapDEK(currentDEK, kek);
+    wrappedKeys[username] = wrappedData;
+  } else {
+    // First-run bootstrap (no DEK yet) — generate a new DEK and wrap it
+    const dek = await Crypto.generateDEK();
+    const wrappedData = await Crypto.wrapDEK(dek, kek);
+    wrappedKeys[username] = wrappedData;
+  }
+  setWrappedKeys(wrappedKeys);
+
+  await addAuditLog('user_register', auditActor, { userId: id, username, role });
   return { success: true, userId: id };
+}
+
+async function registerWithRole(username, password, role, actor) {
+  // Function-level authorization: actor is required and must be admin — fail closed
+  if (!actor || actor.role !== 'admin') {
+    return { success: false, errors: ['Only administrators can create users with specific roles'] };
+  }
+  return _createUserWithRole(username, password, role, actor.username);
 }
 
 async function login(username, password) {
   const [userRl, globalRl] = await Promise.all([
-    checkRateLimit('user', username, 'login'),
-    checkRateLimit('global', '', 'login')
+    checkRateLimit('user', username, 'user_login'),
+    checkRateLimit('global', '', 'user_login')
   ]);
   if (!userRl.allowed || !globalRl.allowed) {
     await addAuditLog('login_rate_limited', username, { remaining: Math.min(userRl.remaining, globalRl.remaining) });
@@ -120,8 +156,14 @@ async function login(username, password) {
   processSuccessfulLogin(user);
   await DB.put('users', user);
 
-  const encKey = await Crypto.deriveSessionKey(password);
-  setEncryptionKey(encKey);
+  // Unwrap the shared Data Encryption Key (DEK) using password-derived KEK
+  const kek = await Crypto.deriveKEK(password);
+  const wrappedKeys = getWrappedKeys();
+  const userWrapped = wrappedKeys[username];
+  if (userWrapped) {
+    const dek = await Crypto.unwrapDEK(userWrapped, kek);
+    setEncryptionKey(dek);
+  }
 
   const token = Crypto.generateId();
   const session = {
@@ -185,6 +227,7 @@ function startIdleTimer() {
 function logout() {
   clearTimeout(idleTimer);
   clearTimeout(warningTimer);
+  _verifiedUser = null;
   let session = null;
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -200,9 +243,10 @@ function logout() {
 }
 
 function getCurrentUser() {
-  const session = getSession();
-  if (!session) return null;
-  return { id: session.userId, username: session.username, role: session.role };
+  if (_verifiedUser) return { ..._verifiedUser };
+  // No verified user available — return null (fail closed).
+  // Views must call requireAuth/requireRole before getCurrentUser.
+  return null;
 }
 
 function hasRole(requiredRoles) {
@@ -212,9 +256,29 @@ function hasRole(requiredRoles) {
   return requiredRoles.includes(user.role);
 }
 
-function requireAuth() {
+async function verifySessionUser(session) {
+  // Authoritative lookup by immutable userId, not mutable username
+  const user = await DB.get('users', session.userId);
+  if (!user) return null;
+  // Cross-check: session username must match DB record — fail closed on mismatch
+  if (user.username !== session.username) return null;
+  if (user.banned) return null;
+  return user;
+}
+
+async function requireAuth() {
   const session = getSession();
   if (!session) {
+    window.location.hash = '/login';
+    return false;
+  }
+  try {
+    const user = await verifySessionUser(session);
+    if (!user) { logout(); window.location.hash = '/login'; return false; }
+    _verifiedUser = { id: user.id, username: user.username, role: user.role };
+  } catch {
+    // DB unavailable — fail closed: do not authorize from unverified session
+    logout();
     window.location.hash = '/login';
     return false;
   }
@@ -222,12 +286,32 @@ function requireAuth() {
   return true;
 }
 
-function requireRole(roles) {
-  if (!requireAuth()) return false;
-  if (!hasRole(roles)) {
-    window.location.hash = '/';
+async function requireRole(roles) {
+  const session = getSession();
+  if (!session) {
+    window.location.hash = '/login';
     return false;
   }
+  if (typeof roles === 'string') roles = [roles];
+  try {
+    const user = await verifySessionUser(session);
+    if (!user) {
+      logout();
+      window.location.hash = '/login';
+      return false;
+    }
+    _verifiedUser = { id: user.id, username: user.username, role: user.role };
+    if (!roles.includes(user.role)) {
+      window.location.hash = '/';
+      return false;
+    }
+  } catch {
+    // DB unavailable — fail closed: do not authorize from unverified session
+    logout();
+    window.location.hash = '/login';
+    return false;
+  }
+  refreshSession();
   return true;
 }
 
@@ -247,7 +331,8 @@ async function needsSetup() {
 async function setupAdmin(username, password) {
   const users = await DB.getAll('users');
   if (users.length > 0) return { success: false, errors: ['Setup already completed'] };
-  return registerWithRole(username, password, 'admin');
+  // Bootstrap path: no actor exists yet, use internal helper directly
+  return _createUserWithRole(username, password, 'admin', 'system');
 }
 
 function hasPermission(permission) {

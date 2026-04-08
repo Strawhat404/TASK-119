@@ -15,25 +15,25 @@
   <main class="main-content" id="app"></main>
 
   <script>
-    // Diagnostic logger to capture "black screen" errors (non-module version)
+    // Global error handlers — log details to console only; show safe message to user
     window.onerror = (msg, url, line, col, error) => {
-      const err = `Error: ${msg}\nAt: ${url}:${line}:${col}\nStack: ${error?.stack}`;
-      console.error(err);
-      if (document.getElementById('app')) document.getElementById('app').innerHTML = `<div class="auth-error" style="margin:20px; white-space:pre-wrap;">${err}</div>`;
-      alert(err);
+      console.error('Error:', msg, '\nAt:', url + ':' + line + ':' + col, '\nStack:', error?.stack);
+      if (document.getElementById('app')) {
+        document.getElementById('app').innerHTML = '<div class="auth-error" style="margin:20px;">Something went wrong. Please refresh the page or contact support.</div>';
+      }
     };
     window.onunhandledrejection = (event) => {
-      const err = `Unhandled Rejection: ${event.reason?.message || event.reason}\nStack: ${event.reason?.stack}`;
-      console.error(err);
-      if (document.getElementById('app')) document.getElementById('app').innerHTML = `<div class="auth-error" style="margin:20px; white-space:pre-wrap;">${err}</div>`;
-      alert(err);
+      console.error('Unhandled Rejection:', event.reason?.message || event.reason, '\nStack:', event.reason?.stack);
+      if (document.getElementById('app')) {
+        document.getElementById('app').innerHTML = '<div class="auth-error" style="margin:20px;">Something went wrong. Please refresh the page or contact support.</div>';
+      }
     };
   </script>
 
   <script type="module">
     import Router from './js/router.js';
     import Store from './js/store.js';
-    import { getSession, getCurrentUser, initRoles, needsSetup, setupAdmin, loadRoles, hasPermission, refreshSession, logout } from './js/services/auth-service.js';
+    import { getSession, getCurrentUser, requireAuth, initRoles, needsSetup, setupAdmin, loadRoles, hasPermission, refreshSession, logout } from './js/services/auth-service.js';
     import { initSessionWarning } from './js/components/session-warning.js';
     import { renderLogin } from './js/views/login.js';
     import { renderDashboard } from './js/views/dashboard.js';
@@ -58,10 +58,13 @@
       { path: '/settings', label: 'Settings', roles: ['visitor', 'operator', 'reviewer', 'admin'] }
     ];
 
-    function buildNav() {
+    async function buildNav() {
       const nav = document.getElementById('nav');
-      const user = getCurrentUser();
       const sidebar = document.getElementById('sidebar');
+
+      // Verify user from DB before rendering nav to avoid stale/null cache
+      await requireAuth();
+      const user = getCurrentUser();
 
       if (!user) {
         sidebar.style.display = 'none';
@@ -82,16 +85,16 @@
       });
     }
 
-    // Register routes
-    Router.register('/login', (route) => { buildNav(); renderLogin(app); });
-    Router.register('/', (route) => { buildNav(); updateNav(route); renderDashboard(app); });
-    Router.register('/reservations', (route) => { buildNav(); updateNav(route); renderReservations(app); });
-    Router.register('/unlock', (route) => { buildNav(); updateNav(route); renderUnlock(app); });
-    Router.register('/map', (route) => { buildNav(); updateNav(route); renderMap(app); });
-    Router.register('/content', (route) => { buildNav(); updateNav(route); renderContent(app); });
-    Router.register('/notifications', (route) => { buildNav(); updateNav(route); renderNotifications(app); });
-    Router.register('/admin', (route) => { buildNav(); updateNav(route); renderAdmin(app); });
-    Router.register('/settings', (route) => { buildNav(); updateNav(route); renderSettings(app); });
+    // Register routes — buildNav is async to ensure verified user before rendering nav
+    Router.register('/login', async (route) => { await buildNav(); renderLogin(app); });
+    Router.register('/', async (route) => { await buildNav(); updateNav(route); renderDashboard(app); });
+    Router.register('/reservations', async (route) => { await buildNav(); updateNav(route); renderReservations(app); });
+    Router.register('/unlock', async (route) => { await buildNav(); updateNav(route); renderUnlock(app); });
+    Router.register('/map', async (route) => { await buildNav(); updateNav(route); renderMap(app); });
+    Router.register('/content', async (route) => { await buildNav(); updateNav(route); renderContent(app); });
+    Router.register('/notifications', async (route) => { await buildNav(); updateNav(route); renderNotifications(app); });
+    Router.register('/admin', async (route) => { await buildNav(); updateNav(route); renderAdmin(app); });
+    Router.register('/settings', async (route) => { await buildNav(); updateNav(route); renderSettings(app); });
 
     // Initialize
     async function init() {

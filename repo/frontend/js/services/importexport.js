@@ -9,7 +9,7 @@ import Crypto from '../crypto.js';
 const EXPORT_STORES = [
   'users', 'roles', 'reservations', 'entry_permissions', 'devices',
   'pois', 'content', 'reports', 'audit_logs', 'notifications',
-  'command_outbox', 'zones', 'geofences'
+  'command_outbox', 'rate_limits', 'zones', 'geofences'
 ];
 
 export async function exportData(password) {
@@ -59,6 +59,14 @@ export async function importData(fileContent, password) {
 
   for (const [storeName, records] of Object.entries(bundle.stores)) {
     if (!EXPORT_STORES.includes(storeName)) continue;
+    if (storeName === 'audit_logs') {
+      // Audit logs are append-only — merge imported entries without clearing existing ones
+      for (const record of records) {
+        const { id, ...fields } = record;
+        try { await DB.add('audit_logs', fields); } catch { /* skip duplicates */ }
+      }
+      continue;
+    }
     await DB.clear(storeName);
     for (const record of records) {
       await DB.add(storeName, record);

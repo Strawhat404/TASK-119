@@ -1,3 +1,5 @@
+import { escapeHTML } from './modal.js';
+
 let drawerEl = null;
 
 export function showDrawer(title, bodyHTML) {
@@ -8,7 +10,7 @@ export function showDrawer(title, bodyHTML) {
   drawerEl.innerHTML = `
     <div class="drawer">
       <div class="drawer-header">
-        <h2>${title}</h2>
+        <h2>${escapeHTML(title)}</h2>
         <button class="drawer-close" aria-label="Close">&times;</button>
       </div>
       <div class="drawer-body">${bodyHTML}</div>

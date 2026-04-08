@@ -1,6 +1,7 @@
 node_modules/
-session.jsonl
+session/
+reports/
+delivery_acceptance_report_*.md
 .DS_Store
 .claude/
-delivery_acceptance_report_*.md
-
+sessions/session.jsonl
