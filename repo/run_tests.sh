@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== Running unit tests ==="
-node --test unit_tests/*.test.js
+# Run all tests inside a Docker container to avoid host package/version mismatches.
+# Uses node:20-alpine for a lightweight, reproducible environment.
 
-echo "=== Running API tests ==="
-node --test API_tests/*.test.js
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "=== Running tests in Docker (node:20-alpine) ==="
+
+docker run --rm \
+  -v "${REPO_DIR}:/app:ro" \
+  -w /app \
+  node:20-alpine \
+  sh -c "node --test unit_tests/*.test.js API_tests/*.test.js"
 
 echo "=== All tests passed ==="
