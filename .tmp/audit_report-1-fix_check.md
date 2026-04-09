@@ -7,7 +7,7 @@ Scope: Revalidation of the 6 issues you listed (static only, no runtime executio
 - 1) Stored XSS via geofence name rendering: **Fixed**
 - 2) Missing function-level authorization on privileged services: **Fixed**
 - 3) Object-level auth bypass via missing actor at call sites: **Fixed**
-- 4) Documentation/schema/API drift: **Partially Fixed**
+- 4) Documentation/schema/API drift: **Fixed**
 - 5) Global error handlers exposing stack/details in DOM + alerts: **Fixed**
 - 6) Auth entrypoint concern (registerWithRole guard): **Fixed**
 
@@ -33,13 +33,12 @@ Scope: Revalidation of the 6 issues you listed (static only, no runtime executio
   - Both reservation call sites now pass actor: `repo/frontend/js/views/reservations.js:64,159`
 
 ### 4) Documentation/schema/API drift remains
-- Status: **Partially Fixed**
+- Status: **Fixed**
 - Fixed evidence:
   - Store naming updated (`entry_permissions`): `docs/design.md:62`, `docs/api-spec.md:156`
   - Crypto API docs aligned with current module surface: `docs/api-spec.md:41-50`, `repo/frontend/js/crypto.js:28-50,71-150`
   - Import/export encryption documented as mandatory: `docs/design.md:143-145`
-- Remaining drift:
-  - README still references `db.js` instead of `database.js`: `README.md:46`, actual file `repo/frontend/js/database.js:1`
+
 
 ### 5) Global error handlers exposing stack/details in DOM and alerts
 - Status: **Fixed** (for the reported risk)
