@@ -49,7 +49,6 @@ Or manually:
 
 ```bash
 node --test unit_tests/*.test.js
-node --test API_tests/*.test.js
 ```
 
 ## Project Structure
@@ -69,7 +68,6 @@ repo/
       components/    — modals, drawers, tables, notifications
       services/      — service layer (auth, audit, permissions, devices, etc.)
   unit_tests/        — Node.js unit tests (import from lib/ modules)
-  API_tests/         — integration/structural tests
   docker-compose.yml — nginx static server
   nginx.conf         — nginx config
   run_tests.sh       — test runner script
