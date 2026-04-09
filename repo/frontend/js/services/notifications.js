@@ -46,13 +46,20 @@ export async function deliverNotification(notification) {
 
 export async function retryFailedNotifications() {
   const all = await DB.getAll('notifications');
-  // Retryable: notifications that failed delivery but haven't exhausted retries.
-  // applyFailedDelivery increments retryCount and only sets status='failed' at MAX_RETRIES,
-  // so retryable notifications are still 'pending' with retryCount > 0 and < MAX_RETRIES.
-  const retryable = all.filter(n => n.status === 'pending' && n.retryCount > 0 && n.retryCount < MAX_RETRIES);
+  // Retryable: notifications that are still pending with partial failures,
+  // OR notifications that fully failed (exhausted retries) — reset them for another round.
+  const retryable = all.filter(n =>
+    (n.status === 'pending' && n.retryCount > 0 && n.retryCount < MAX_RETRIES) ||
+    n.status === 'failed'
+  );
   const results = [];
 
   for (const n of retryable) {
+    if (n.status === 'failed') {
+      n.status = 'pending';
+      n.retryCount = 0;
+      n.failedAt = null;
+    }
     const result = await deliverNotification(n);
     results.push(result);
   }

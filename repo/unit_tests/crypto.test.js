@@ -104,10 +104,18 @@ describe('Crypto — AES-GCM + PBKDF2', () => {
   });
 });
 
-describe('Crypto — At-Rest Encryption', () => {
-  async function deriveSessionKey(password) {
+describe('Crypto — At-Rest Encryption (KEK/DEK model)', () => {
+  // Mirrors the production crypto.js KEK/DEK key-wrapping model:
+  //   deriveKEK(password) → wrapKey/unwrapKey
+  //   generateDEK()       → encrypt/decrypt (extractable for wrapping)
+  //   wrapDEK / unwrapDEK → persist DEK per-user
+  //   encryptRecord / decryptRecord → at-rest encryption with DEK
+
+  const ENC_AT_REST_SALT = 'harborgate-at-rest-v1';
+
+  async function deriveKEK(password) {
     const enc = new TextEncoder();
-    const salt = enc.encode('harborgate-at-rest-v1');
+    const salt = enc.encode(ENC_AT_REST_SALT);
     const keyMaterial = await crypto.subtle.importKey(
       'raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']
     );
@@ -116,57 +124,100 @@ describe('Crypto — At-Rest Encryption', () => {
       keyMaterial,
       { name: 'AES-GCM', length: 256 },
       false,
+      ['wrapKey', 'unwrapKey']
+    );
+  }
+
+  async function generateDEK() {
+    return crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 },
+      true,
       ['encrypt', 'decrypt']
     );
   }
 
-  async function encryptRecord(record, key) {
+  async function wrapDEK(dek, kek) {
+    const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+    const wrapped = await crypto.subtle.wrapKey('raw', dek, kek, { name: 'AES-GCM', iv });
+    return {
+      iv: Buffer.from(iv).toString('base64'),
+      wrapped: Buffer.from(new Uint8Array(wrapped)).toString('base64')
+    };
+  }
+
+  async function unwrapDEK(wrappedData, kek) {
+    const iv = Buffer.from(wrappedData.iv, 'base64');
+    const wrapped = Buffer.from(wrappedData.wrapped, 'base64');
+    return crypto.subtle.unwrapKey(
+      'raw', wrapped, kek,
+      { name: 'AES-GCM', iv },
+      { name: 'AES-GCM', length: 256 },
+      true,
+      ['encrypt', 'decrypt']
+    );
+  }
+
+  async function encryptRecord(record, dek) {
     const enc = new TextEncoder();
     const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
     const plaintext = enc.encode(JSON.stringify(record));
-    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, dek, plaintext);
     const combined = new Uint8Array(iv.length + ciphertext.byteLength);
     combined.set(iv, 0);
     combined.set(new Uint8Array(ciphertext), iv.length);
     return { _encrypted: true, _payload: Buffer.from(combined).toString('base64') };
   }
 
-  async function decryptRecord(encRecord, key) {
+  async function decryptRecord(encRecord, dek) {
     if (!encRecord || !encRecord._encrypted) return encRecord;
     const data = Buffer.from(encRecord._payload, 'base64');
     const iv = data.subarray(0, IV_LENGTH);
     const ciphertext = data.subarray(IV_LENGTH);
-    const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, dek, ciphertext);
     return JSON.parse(new TextDecoder().decode(plainBuffer));
   }
 
-  it('should encrypt and decrypt a record', async () => {
-    const key = await deriveSessionKey('TestPassword1!');
+  it('should generate a DEK and encrypt/decrypt a record', async () => {
+    const dek = await generateDEK();
     const record = { username: 'admin', passwordHash: 'abc123', role: 'admin' };
-    const encrypted = await encryptRecord(record, key);
+    const encrypted = await encryptRecord(record, dek);
     assert.equal(encrypted._encrypted, true);
     assert.ok(encrypted._payload);
 
-    const decrypted = await decryptRecord(encrypted, key);
+    const decrypted = await decryptRecord(encrypted, dek);
     assert.equal(decrypted.username, 'admin');
     assert.equal(decrypted.passwordHash, 'abc123');
   });
 
-  it('should produce same key from same password', async () => {
-    const key1 = await deriveSessionKey('TestPassword1!');
-    const key2 = await deriveSessionKey('TestPassword1!');
+  it('should wrap and unwrap DEK with same password KEK', async () => {
+    const kek = await deriveKEK('TestPassword1!');
+    const dek = await generateDEK();
+    const wrappedData = await wrapDEK(dek, kek);
+
+    const kek2 = await deriveKEK('TestPassword1!');
+    const unwrappedDek = await unwrapDEK(wrappedData, kek2);
+
     const record = { test: 'data' };
-    const enc1 = await encryptRecord(record, key1);
-    const dec = await decryptRecord(enc1, key2);
-    assert.deepEqual(dec, record);
+    const encrypted = await encryptRecord(record, dek);
+    const decrypted = await decryptRecord(encrypted, unwrappedDek);
+    assert.deepEqual(decrypted, record);
   });
 
-  it('should fail with wrong password key', async () => {
-    const key1 = await deriveSessionKey('CorrectPassword1!');
-    const key2 = await deriveSessionKey('WrongPassword1!!');
+  it('should fail to unwrap DEK with wrong password KEK', async () => {
+    const kek1 = await deriveKEK('CorrectPassword1!');
+    const dek = await generateDEK();
+    const wrappedData = await wrapDEK(dek, kek1);
+
+    const kek2 = await deriveKEK('WrongPassword1!!');
+    await assert.rejects(() => unwrapDEK(wrappedData, kek2));
+  });
+
+  it('should fail decryption with a different DEK', async () => {
+    const dek1 = await generateDEK();
+    const dek2 = await generateDEK();
     const record = { secret: 'value' };
-    const encrypted = await encryptRecord(record, key1);
-    await assert.rejects(() => decryptRecord(encrypted, key2));
+    const encrypted = await encryptRecord(record, dek1);
+    await assert.rejects(() => decryptRecord(encrypted, dek2));
   });
 
   it('should pass through non-encrypted records', async () => {

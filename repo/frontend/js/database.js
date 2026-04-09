@@ -6,12 +6,14 @@ const DB_NAME = 'harborgate';
 const DB_VERSION = 2;
 
 // Stores whose records are encrypted at rest when a session key is available.
-// NOTE: 'users' and 'roles' are intentionally excluded — user records must be
-// readable pre-auth (before any session key exists) so that login can read
-// passwordHash/salt for verification. Auth fields are already protected by
-// PBKDF2 hashing; encrypting them with a per-session key would lock users out
-// whenever an admin updates their record under a different key.
+// NOTE: 'roles' is excluded — role definitions contain no sensitive data and
+// must be readable pre-auth. 'users' IS included: only index and lockout fields
+// (username, role, failedAttempts, lockedUntil, banned) are preserved as
+// plaintext. Sensitive credentials (passwordHash, passwordSalt) are encrypted
+// in the payload — the login flow derives the KEK and unwraps the DEK before
+// needing them.
 const ENCRYPTED_STORES = new Set([
+  'users',
   'reservations',
   'entry_permissions',
   'devices',
@@ -66,7 +68,13 @@ async function encryptIfNeeded(storeName, record) {
     const { default: Crypto } = await import('./crypto.js');
     const indexFields = {};
     if (record.id !== undefined) indexFields.id = record.id;
-    if (storeName === 'reservations') {
+    if (storeName === 'users') {
+      indexFields.username = record.username;
+      indexFields.role = record.role;
+      indexFields.failedAttempts = record.failedAttempts;
+      indexFields.lockedUntil = record.lockedUntil;
+      indexFields.banned = record.banned;
+    } else if (storeName === 'reservations') {
       indexFields.userId = record.userId;
       indexFields.status = record.status;
     } else if (storeName === 'devices') {

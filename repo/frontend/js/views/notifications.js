@@ -61,7 +61,7 @@ export async function renderNotifications(container) {
     <div class="view-header">
       <h1>Notifications${unreadCount > 0 ? ` <span class="notification-badge">${unreadCount}</span>` : ''}</h1>
       <div>
-        <button class="btn btn-secondary" id="retry-failed-btn">Retry Failed</button>
+        <button class="btn btn-secondary" id="retry-failed-btn">Retry Undelivered</button>
         <button class="btn btn-secondary" id="mark-all-read">Mark All Read</button>
         <button class="btn btn-danger" id="clear-all-notif">Clear All</button>
       </div>
@@ -161,7 +161,7 @@ export async function renderNotifications(container) {
 
   document.getElementById('retry-failed-btn').addEventListener('click', async () => {
     const results = await retryFailedNotifications();
-    showNotification(`Retried ${results.length} notification(s)`, 'info');
+    showNotification(`Retried ${results.length} undelivered notification(s)`, 'info');
     renderNotifications(container);
   });
 

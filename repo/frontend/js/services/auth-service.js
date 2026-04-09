@@ -142,9 +142,35 @@ async function login(username, password) {
     return { success: false, error: `Account locked. Try again in ${remaining} minute(s).` };
   }
 
-  const valid = await Crypto.verifyPassword(password, user.passwordHash, user.passwordSalt);
+  // Derive KEK and try to unwrap DEK before password verification so that
+  // encrypted credential fields (passwordHash, passwordSalt) can be decrypted.
+  const kek = await Crypto.deriveKEK(password);
+  const wrappedKeys = getWrappedKeys();
+  const userWrapped = wrappedKeys[username];
+  let fullUser = user;
+
+  if (userWrapped) {
+    try {
+      const dek = await Crypto.unwrapDEK(userWrapped, kek);
+      setEncryptionKey(dek);
+      // Re-fetch user with decryption now enabled to access passwordHash/Salt
+      fullUser = await DB.getOneByIndex('users', 'username', username);
+    } catch {
+      // DEK unwrap failed — password is wrong
+      const result = processFailedLogin(user);
+      await DB.put('users', user);
+      if (result.locked) {
+        await addAuditLog('account_locked', username, { reason: 'max_failed_attempts' });
+        return { success: false, error: 'Account locked for 15 minutes due to too many failed attempts.' };
+      }
+      return { success: false, error: 'Invalid credentials', attemptsLeft: result.attemptsLeft };
+    }
+  }
+
+  const valid = await Crypto.verifyPassword(password, fullUser.passwordHash, fullUser.passwordSalt);
   if (!valid) {
     const result = processFailedLogin(user);
+    clearEncryptionKey();
     await DB.put('users', user);
     if (result.locked) {
       await addAuditLog('account_locked', username, { reason: 'max_failed_attempts' });
@@ -155,15 +181,6 @@ async function login(username, password) {
 
   processSuccessfulLogin(user);
   await DB.put('users', user);
-
-  // Unwrap the shared Data Encryption Key (DEK) using password-derived KEK
-  const kek = await Crypto.deriveKEK(password);
-  const wrappedKeys = getWrappedKeys();
-  const userWrapped = wrappedKeys[username];
-  if (userWrapped) {
-    const dek = await Crypto.unwrapDEK(userWrapped, kek);
-    setEncryptionKey(dek);
-  }
 
   const token = Crypto.generateId();
   const session = {
