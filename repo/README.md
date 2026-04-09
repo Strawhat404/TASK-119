@@ -51,24 +51,4 @@ Or manually:
 node --test unit_tests/*.test.js
 ```
 
-## Project Structure
 
-```
-repo/
-  frontend/
-    index.html       — single entry point, hash-based routing
-    css/             — stylesheets
-    js/
-      store.js       — lightweight client-side state store
-      router.js      — hash-based router
-      database.js          — IndexedDB wrapper with encryption-at-rest
-      crypto.js      — Web Crypto API helpers
-      lib/           — pure logic modules (no browser deps, testable in Node)
-      views/         — one file per view/screen
-      components/    — modals, drawers, tables, notifications
-      services/      — service layer (auth, audit, permissions, devices, etc.)
-  unit_tests/        — Node.js unit tests (import from lib/ modules)
-  docker-compose.yml — nginx static server
-  nginx.conf         — nginx config
-  run_tests.sh       — test runner script
-```
