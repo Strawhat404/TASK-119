@@ -36,3 +36,4 @@ Scope: Static-only verification (no runtime execution, no Docker, no tests run)
 
 ## Final Result
 - Fixed: **5 / 5** (relative to the exact five reported issues)
+- Note: although issue #5 is fixed as written, tests are still not true runtime end-to-end integration tests (manual/runtime verification is still required for full delivery confidence).

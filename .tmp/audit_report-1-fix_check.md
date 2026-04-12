@@ -7,7 +7,7 @@ Scope: Revalidation of the 6 issues you listed (static only, no runtime executio
 - 1) Stored XSS via geofence name rendering: **Fixed**
 - 2) Missing function-level authorization on privileged services: **Fixed**
 - 3) Object-level auth bypass via missing actor at call sites: **Fixed**
-- 4) Documentation/schema/API drift: ** Fixed**
+- 4) Documentation/schema/API drift: **Fixed**
 - 5) Global error handlers exposing stack/details in DOM + alerts: **Fixed**
 - 6) Auth entrypoint concern (registerWithRole guard): **Fixed**
 
